@@ -69,22 +69,14 @@ private:
     // Resolution properties
     uint32_t output_width_;
     uint32_t output_height_;
-    float resolution_ratio_;
+    // Fixed resolution ratio of 0.65
+    const float resolution_ratio_ = 0.65f;
 
     po::variables_map args_;
      
 public:
     CameraGMSL(const po::variables_map args): args_(args)
     {
-        // Get resolution ratio parameter (between 0.0 and 1.0)
-        resolution_ratio_ = args_["resolution-ratio"].as<float>();
-        
-        // Validate the ratio is between 0.0 and 1.0
-        if (resolution_ratio_ <= 0.0f || resolution_ratio_ > 1.0f) {
-            ROS_WARN("Invalid resolution ratio %.2f. Must be between 0.0 and 1.0. Using 1.0 (full resolution).", resolution_ratio_);
-            resolution_ratio_ = 1.0f;
-        }
-        
         // -----------------------------------------
         // Initialize DriveWorks context and SAL
         // -----------------------------------------
@@ -95,6 +87,7 @@ public:
 
             // create HAL module of the SDK
             CHECK_DW_ERROR(dwSAL_initialize(&sal_, sdk_));
+
         }
 
         //------------------------------------------------------------------------------
@@ -102,6 +95,8 @@ public:
         // - the SensorCamera module
         // -----------------------------------------
         {
+
+
             dwSensorParams params;
             std::string parameter_string = std::string("output-format=yuv,fifo-size=3");
 
@@ -142,7 +137,7 @@ public:
 
             CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera_properties_, camera_));
             
-            // Calculate output resolution based on ratio while maintaining aspect ratio
+            // Calculate output resolution based on fixed ratio of 0.65
             output_width_ = static_cast<uint32_t>(camera_properties_.resolution.x * resolution_ratio_);
             output_height_ = static_cast<uint32_t>(camera_properties_.resolution.y * resolution_ratio_);
             
@@ -177,6 +172,7 @@ public:
             CHECK_DW_ERROR(dwImage_create(&frame_rgb_,  rgb_img_prop, sdk_));
             ROS_INFO("Successfully initialized nvmedia img with resolution %dx%d\n", output_width_, output_height_);
         }
+        
     }
 
     ~CameraGMSL()
@@ -193,6 +189,7 @@ public:
         dwSAL_release(&sal_);
         dwRelease(&sdk_);
         dwLogger_release();
+
     }
 
     void publish()
@@ -265,12 +262,15 @@ public:
         {
             std::cerr << e.what() << "\n";
         }
+        
     }
+
 };
 
 //------------------------------------------------------------------------------
 int main(int argc, const char *argv[])
 {
+
     po::options_description desc{"Options"};
     desc.add_options()
         ("help,h", "Help screen")
@@ -285,9 +285,7 @@ int main(int argc, const char *argv[])
             "Optional parameter used only for Tegra B, enables slave mode.\n")
         ("custom-board", po::value<std::string>()-> default_value("0"), "If true, then the configuration for board and camera "
                               "will be input from the config-file\n")
-        ("custom-config", po::value<std::string>()-> default_value(""), "Set of custom board extra configuration\n")
-        ("resolution-ratio", po::value<float>()-> default_value(1.0f), 
-            "Resolution scaling ratio (0.0 to 1.0). For example, 0.5 means half the native resolution.\n");
+        ("custom-config", po::value<std::string>()-> default_value(""), "Set of custom board extra configuration\n");
 
     po::variables_map args;
     po::store(parse_command_line(argc, argv, desc), args);
