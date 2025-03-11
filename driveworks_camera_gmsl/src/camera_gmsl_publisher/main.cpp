@@ -146,7 +146,9 @@ public:
             gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw_ismail", 1);
 
             ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
+            std::cout << "TEST\n";
             ROS_INFO("Successfully initialized ros\n" );
+            ROS_INFO("Debug");
         }
 
         //Nvmedia initialization
