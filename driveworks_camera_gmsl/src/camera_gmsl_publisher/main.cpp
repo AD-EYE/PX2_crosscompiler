@@ -159,7 +159,7 @@ public:
             ros::VP_string ros_str;
             ros::init(ros_str, "camera_gmsl");
             ros::NodeHandle n;
-            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw_cl1rev3", 1);
+            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw_cl1rev4", 1);
 
             ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
             ROS_INFO("Successfully initialized ros\n");
@@ -229,10 +229,9 @@ public:
                 // Get the RGBA image handle
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
                 
-                // Convert YUV to RGBA with scaling in one step
-                // When YUV source and RGBA destination have different sizes, Driveworks performs scaling
-                CHECK_DW_ERROR(dwImage_copyConvertResize(frame_rgb_, frame_yuv, 
-                                                         DW_INTERPOLATION_TYPE_LINEAR, sdk_));
+                // Try to use copyConvert and see if it handles the different dimensions
+                // In DriveWorks 1.2 this might do the scaling automatically
+                CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_yuv, sdk_));
                 
                 // Prepare ROS message
                 header.seq = count; // user defined counter
