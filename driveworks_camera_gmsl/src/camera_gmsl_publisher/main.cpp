@@ -18,7 +18,6 @@
 
 // Image
 #include <dw/image/ImageStreamer.h>
-
 #include <dw/image/FormatConverter_vibrante.h>
 
 // nvmedia for surface map
@@ -162,7 +161,7 @@ public:
             ros::VP_string ros_str;
             ros::init(ros_str, "camera_gmsl");
             ros::NodeHandle n;
-            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw_cl1rev1", 1);
+            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw_cl1rev2", 1);
 
             ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
             ROS_INFO("Successfully initialized ros\n" );
@@ -180,14 +179,20 @@ public:
             ROS_INFO("Successfully initialized intermediate nvmedia img with native resolution %dx%d\n", 
                     camera_properties_.resolution.x, camera_properties_.resolution.y);
             
-            // Create the scaled resolution RGBA image
-            dwImageProperties rgb_img_prop{};
-            rgb_img_prop.height = output_height_;
-            rgb_img_prop.width = output_width_;
-            rgb_img_prop.type = DW_IMAGE_NVMEDIA;
-            rgb_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
-            CHECK_DW_ERROR(dwImage_create(&frame_rgb_, rgb_img_prop, sdk_));
-            ROS_INFO("Successfully initialized output nvmedia img with resolution %dx%d\n", output_width_, output_height_);
+            // Create the scaled resolution RGBA image (only if using less than full resolution)
+            if (resolution_ratio_ < 1.0f) {
+                dwImageProperties rgb_img_prop{};
+                rgb_img_prop.height = output_height_;
+                rgb_img_prop.width = output_width_;
+                rgb_img_prop.type = DW_IMAGE_NVMEDIA;
+                rgb_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
+                CHECK_DW_ERROR(dwImage_create(&frame_rgb_, rgb_img_prop, sdk_));
+                ROS_INFO("Successfully initialized output nvmedia img with resolution %dx%d\n", output_width_, output_height_);
+            } else {
+                // At full resolution, we can just use the native frame
+                frame_rgb_ = frame_rgb_native_;
+                ROS_INFO("Using full resolution, no scaling needed\n");
+            }
         }
     }
 
@@ -199,8 +204,12 @@ public:
             dwSAL_releaseSensor(&camera_);
         }
 
-        //destroy created images
-        dwImage_destroy(&frame_rgb_);
+        // Only destroy frame_rgb_ if it's different from frame_rgb_native_
+        if (resolution_ratio_ < 1.0f) {
+            dwImage_destroy(&frame_rgb_);
+        }
+        
+        // Always destroy the native frame
         dwImage_destroy(&frame_rgb_native_);
 
         dwSAL_release(&sal_);
@@ -224,6 +233,7 @@ public:
                 dwCameraFrameHandle_t frame;
                 uint32_t camera_sibling_id = 0;
                 dwImageHandle_t frame_yuv;
+                dwImageHandle_t scaled_frame_handle = DW_NULL_HANDLE;
                 dwImageNvMedia* nvmedia_yuv_img_ptr;
                 dwImageNvMedia* nvmedia_rgb_img_ptr;
                 dwImageNvMedia* nvmedia_rgb_native_img_ptr;
@@ -239,9 +249,8 @@ public:
                 // Get YUV image from camera frame
                 CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
                 
-                // Get handles to our RGBA images (native and scaled)
+                // Get handle to native RGBA image
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_native_img_ptr, frame_rgb_native_));
-                CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
                 
                 // Create binding for YUV frame
                 CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
@@ -249,18 +258,48 @@ public:
                 // Step 1: Convert from YUV to RGBA at native resolution
                 CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_native_, frame_yuv, sdk_));
                 
-                // Step 2: Scale from native RGBA to output RGBA 
+                // Step 2: Scale if using less than full resolution
                 if (resolution_ratio_ < 1.0f) {
-                    // Only scale if we're using a reduced resolution
-                    dwImageStreamerHandle_t streamer = DW_NULL_HANDLE;
-                    dwImageStreamerParams streamer_params{};
-                    CHECK_DW_ERROR(dwImageStreamer_initialize(&streamer, &streamer_params, frame_rgb_native_, frame_rgb_, sdk_));
-                    CHECK_DW_ERROR(dwImageStreamer_producerSend(frame_rgb_native_, streamer));
-                    CHECK_DW_ERROR(dwImageStreamer_consumerReceive(&frame_rgb_, 33000, streamer));
-                    CHECK_DW_ERROR(dwImageStreamer_release(&streamer));
+                    // For DriveWorks 1.2, we need to use manual scaling or a different method
+                    // We can use NvMedia's 2D scaling functionality instead
+                    
+                    // Get the output RGBA image
+                    CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
+                    
+                    // Use NvMedia 2D to perform the scaling
+                    NvMediaImage* src_img = nvmedia_rgb_native_img_ptr->img;
+                    NvMediaImage* dst_img = nvmedia_rgb_img_ptr->img;
+                    
+                    // Create NvMedia 2D handle if needed for scaling
+                    static NvMedia2D* nvmedia2D = NULL;
+                    if (!nvmedia2D) {
+                        nvmedia2D = NvMedia2DCreate();
+                        if (!nvmedia2D) {
+                            throw std::runtime_error("Failed to create NvMedia2D handle");
+                        }
+                    }
+                    
+                    // Perform scaling with bilinear filter
+                    NvMediaRect srcRect, dstRect;
+                    srcRect.x = 0;
+                    srcRect.y = 0;
+                    srcRect.width = camera_properties_.resolution.x;
+                    srcRect.height = camera_properties_.resolution.y;
+                    
+                    dstRect.x = 0;
+                    dstRect.y = 0;
+                    dstRect.width = output_width_;
+                    dstRect.height = output_height_;
+                    
+                    NvMedia2DBlitEx(nvmedia2D, dst_img, &dstRect, src_img, &srcRect, 
+                                    NVMEDIA_2D_BILINEAR_FILTER);
+                }
+                
+                // Get the final image to publish
+                if (resolution_ratio_ < 1.0f) {
+                    CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
                 } else {
-                    // If full resolution, just copy the data directly
-                    CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_rgb_native_, sdk_));
+                    nvmedia_rgb_img_ptr = nvmedia_rgb_native_img_ptr;
                 }
 
                 // Prepare ROS message
@@ -289,6 +328,7 @@ public:
                 
                 // Cleanup
                 CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));       
+                
                 // Return frame to camera
                 CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
                 
