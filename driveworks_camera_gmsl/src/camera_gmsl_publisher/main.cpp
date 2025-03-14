@@ -1,3 +1,4 @@
+
 // ROS
 #include "ros/ros.h"
 #include "std_msgs/String.h"
@@ -66,17 +67,13 @@ private:
     dwImageProperties camera_image_properties_;
     dwCameraProperties camera_properties_;
 
-    // Resolution properties
-    uint32_t output_width_;
-    uint32_t output_height_;
-    // Fixed resolution ratio of 0.10
-    const float resolution_ratio_ = 0.10f;
-
     po::variables_map args_;
      
 public:
     CameraGMSL(const po::variables_map args): args_(args)
     {
+
+    
         // -----------------------------------------
         // Initialize DriveWorks context and SAL
         // -----------------------------------------
@@ -136,19 +133,9 @@ public:
             CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
 
             CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera_properties_, camera_));
-            
-            // Calculate output resolution based on fixed ratio of 0.10
-            output_width_ = static_cast<uint32_t>(camera_properties_.resolution.x * resolution_ratio_);
-            output_height_ = static_cast<uint32_t>(camera_properties_.resolution.y * resolution_ratio_);
-            
-            // Ensure minimum size of 1x1
-            output_width_ = std::max(output_width_, 1u);
-            output_height_ = std::max(output_height_, 1u);
-            
-            ROS_INFO("Camera native resolution: %dx%d at framerate of %f FPS",
+            ROS_INFO("Successfully initialized camera with resolution of %dx%d at framerate of %f FPS\n",
                 camera_properties_.resolution.x, camera_properties_.resolution.y, camera_properties_.framerate);
-            ROS_INFO("Using resolution ratio: %.2f", resolution_ratio_);
-            ROS_INFO("Output resolution: %dx%d", output_width_, output_height_);
+
         }
 
          //ROS initialization
@@ -165,12 +152,12 @@ public:
         //Nvmedia initialization
         {
             dwImageProperties rgb_img_prop{};
-            rgb_img_prop.height = output_height_;
-            rgb_img_prop.width = output_width_;
+            rgb_img_prop.height = 128;
+            rgb_img_prop.width = 192;
             rgb_img_prop.type = DW_IMAGE_NVMEDIA;
             rgb_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
-            CHECK_DW_ERROR(dwImage_create(&frame_rgb_,  rgb_img_prop, sdk_));
-            ROS_INFO("Successfully initialized nvmedia img with resolution %dx%d\n", output_width_, output_height_);
+            CHECK_DW_ERROR(dwImage_create(&frame_rgb_,  rgb_img_prop,sdk_	));
+            ROS_INFO("Successfully initialized nvmedia img.\n" );
         }
         
     }
@@ -223,8 +210,6 @@ public:
                 CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
                 CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
-                
-                // Copy and convert from native image to our scaled output resolution
                 CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_yuv, sdk_));
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
 
@@ -241,13 +226,13 @@ public:
 
                 img_size = img_msg.step * img_msg.height;
                 img_msg.data.resize(img_size);
-                NvMediaImageSurfaceMap surfaceMap;
+                    NvMediaImageSurfaceMap surfaceMap;
                 if (NvMediaImageLock(nvmedia_rgb_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
                 {
-                    unsigned char* buffer = (unsigned char*)surfaceMap.surface[0].mapping;
-                    memcpy((char *)( &img_msg.data[0] ) , buffer , img_size);
-                    gmsl_pub_img_.publish(ros_img_ptr_);
-                    NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
+                        unsigned char* buffer = (unsigned char*)surfaceMap.surface[0].mapping;
+                        memcpy((char *)( &img_msg.data[0] ) , buffer , img_size);
+                        gmsl_pub_img_.publish(ros_img_ptr_);
+                        NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
                 }
                 //   cleanup
                 CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));       
