@@ -18,6 +18,7 @@
 
 // Image
 #include <dw/image/ImageStreamer.h>
+
 #include <dw/image/FormatConverter_vibrante.h>
 
 // nvmedia for surface map
@@ -58,6 +59,7 @@ private:
     ros::Publisher gmsl_pub_, gmsl_pub_img_;
     sensor_msgs::ImagePtr ros_img_ptr_; 
 
+
     // Image handles and properties
     dwImageHandle_t frame_rgb_ = DW_NULL_HANDLE; 
     dwSensorHandle_t camera_ = DW_NULL_HANDLE;
@@ -67,22 +69,14 @@ private:
     // Resolution properties
     uint32_t output_width_;
     uint32_t output_height_;
-    float resolution_ratio_;
+    // Fixed resolution ratio of 0.10
+    const float resolution_ratio_ = 0.10f;
 
     po::variables_map args_;
      
 public:
     CameraGMSL(const po::variables_map args): args_(args)
     {
-        // Get resolution ratio parameter (between 0.0 and 1.0)
-        resolution_ratio_ = args_["resolution-ratio"].as<float>();
-        
-        // Validate the ratio is between 0.0 and 1.0
-        if (resolution_ratio_ <= 0.0f || resolution_ratio_ > 1.0f) {
-            ROS_WARN("Invalid resolution ratio %.2f. Must be between 0.0 and 1.0. Using 1.0 (full resolution).", resolution_ratio_);
-            resolution_ratio_ = 1.0f;
-        }
-        
         // -----------------------------------------
         // Initialize DriveWorks context and SAL
         // -----------------------------------------
@@ -93,6 +87,7 @@ public:
 
             // create HAL module of the SDK
             CHECK_DW_ERROR(dwSAL_initialize(&sal_, sdk_));
+
         }
 
         //------------------------------------------------------------------------------
@@ -100,6 +95,8 @@ public:
         // - the SensorCamera module
         // -----------------------------------------
         {
+
+
             dwSensorParams params;
             std::string parameter_string = std::string("output-format=yuv,fifo-size=3");
 
@@ -140,7 +137,7 @@ public:
 
             CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera_properties_, camera_));
             
-            // Calculate output resolution based on ratio while maintaining aspect ratio
+            // Calculate output resolution based on fixed ratio of 0.10
             output_width_ = static_cast<uint32_t>(camera_properties_.resolution.x * resolution_ratio_);
             output_height_ = static_cast<uint32_t>(camera_properties_.resolution.y * resolution_ratio_);
             
@@ -154,28 +151,28 @@ public:
             ROS_INFO("Output resolution: %dx%d", output_width_, output_height_);
         }
 
-        // ROS initialization
+         //ROS initialization
         {
             ros::VP_string ros_str;
             ros::init(ros_str, "camera_gmsl");
             ros::NodeHandle n;
-            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw_cl1rev4", 1);
+            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw", 1);
 
             ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
-            ROS_INFO("Successfully initialized ros\n");
+            ROS_INFO("Successfully initialized ros\n" );
         }
 
-        // Create RGBA image with the desired output resolution
+        //Nvmedia initialization
         {
             dwImageProperties rgb_img_prop{};
             rgb_img_prop.height = output_height_;
             rgb_img_prop.width = output_width_;
             rgb_img_prop.type = DW_IMAGE_NVMEDIA;
             rgb_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
-            CHECK_DW_ERROR(dwImage_create(&frame_rgb_, rgb_img_prop, sdk_));
-            ROS_INFO("Successfully initialized nvmedia img with resolution %dx%d\n", 
-                    output_width_, output_height_);
+            CHECK_DW_ERROR(dwImage_create(&frame_rgb_,  rgb_img_prop, sdk_));
+            ROS_INFO("Successfully initialized nvmedia img with resolution %dx%d\n", output_width_, output_height_);
         }
+        
     }
 
     ~CameraGMSL()
@@ -186,12 +183,13 @@ public:
             dwSAL_releaseSensor(&camera_);
         }
 
-        // Destroy created image
+        //destroy created image
         dwImage_destroy(&frame_rgb_);
 
         dwSAL_release(&sal_);
         dwRelease(&sdk_);
         dwLogger_release();
+
     }
 
     void publish()
@@ -216,24 +214,21 @@ public:
                 sensor_msgs::Image &img_msg = *ros_img_ptr_; // >> message to be sent
                 std_msgs::Header header; // empty header
                 size_t img_size;
+
                 
-                // Read from camera
+                // read from camera will update the low level buffers frame of the camera
+                // those frames are images with NATIVE properties that depend on the type and sensor properties set at creation
                 CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, camera_sibling_id, timeout, camera_));
 
-                // Get the YUV image from camera
                 CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
-                
-                // Bind YUV image to a frame handle
+                CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
                 CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
                 
-                // Get the RGBA image handle
-                CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
-                
-                // Try to use copyConvert and see if it handles the different dimensions
-                // In DriveWorks 1.2 this might do the scaling automatically
+                // Copy and convert from native image to our scaled output resolution
                 CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_yuv, sdk_));
+                CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
+
                 
-                // Prepare ROS message
                 header.seq = count; // user defined counter
                 header.stamp = ros::Time::now(); 
                     
@@ -246,23 +241,18 @@ public:
 
                 img_size = img_msg.step * img_msg.height;
                 img_msg.data.resize(img_size);
-                
-                // Copy data from GPU to CPU
                 NvMediaImageSurfaceMap surfaceMap;
                 if (NvMediaImageLock(nvmedia_rgb_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
                 {
                     unsigned char* buffer = (unsigned char*)surfaceMap.surface[0].mapping;
-                    memcpy((char *)(&img_msg.data[0]), buffer, img_size);
+                    memcpy((char *)( &img_msg.data[0] ) , buffer , img_size);
                     gmsl_pub_img_.publish(ros_img_ptr_);
                     NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
                 }
-                
-                // Cleanup
-                CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));
-                
-                // Return frame to camera
+                //   cleanup
+                CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));       
+                // return frame
                 CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
-                
                 ros::spinOnce();
                 loop_rate.sleep();
                 ++count;
@@ -272,12 +262,15 @@ public:
         {
             std::cerr << e.what() << "\n";
         }
+        
     }
+
 };
 
 //------------------------------------------------------------------------------
 int main(int argc, const char *argv[])
 {
+
     po::options_description desc{"Options"};
     desc.add_options()
         ("help,h", "Help screen")
@@ -292,9 +285,7 @@ int main(int argc, const char *argv[])
             "Optional parameter used only for Tegra B, enables slave mode.\n")
         ("custom-board", po::value<std::string>()-> default_value("0"), "If true, then the configuration for board and camera "
                               "will be input from the config-file\n")
-        ("custom-config", po::value<std::string>()-> default_value(""), "Set of custom board extra configuration\n")
-        ("resolution-ratio", po::value<float>()-> default_value(1.0f), 
-            "Resolution scaling ratio (0.0 to 1.0). For example, 0.5 means half the native resolution.\n");
+        ("custom-config", po::value<std::string>()-> default_value(""), "Set of custom board extra configuration\n");
 
     po::variables_map args;
     po::store(parse_command_line(argc, argv, desc), args);
