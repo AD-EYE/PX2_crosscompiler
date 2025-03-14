@@ -143,7 +143,7 @@ public:
             ros::VP_string ros_str;
             ros::init(ros_str, "camera_gmsl");
             ros::NodeHandle n;
-            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw", 1);
+            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw_cl2fixed", 1);
 
             ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
             ROS_INFO("Successfully initialized ros\n" );
@@ -152,8 +152,8 @@ public:
         //Nvmedia initialization
         {
             dwImageProperties rgb_img_prop{};
-            rgb_img_prop.height = 128;
-            rgb_img_prop.width = 192;
+            rgb_img_prop.height = static_cast<uint32_t>(120);
+            rgb_img_prop.width = static_cast<uint32_t>(192);
             rgb_img_prop.type = DW_IMAGE_NVMEDIA;
             rgb_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
             CHECK_DW_ERROR(dwImage_create(&frame_rgb_,  rgb_img_prop,sdk_	));
