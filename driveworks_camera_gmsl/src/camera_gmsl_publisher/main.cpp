@@ -1,4 +1,3 @@
-
 // ROS
 #include "ros/ros.h"
 #include "std_msgs/String.h"
@@ -182,108 +181,105 @@ public:
 
     }
 
-
-
-void publish()
-{
-    std::string cam_type = args_["camera-type"].as<std::string>();
-    ROS_INFO("Camera type - %s \n", cam_type.c_str());
-    ROS_INFO("Starting to publish images");
-
-    // İstediğiniz hedef çözünürlüğü belirleyin
-    const int TARGET_WIDTH = 640;  // İstediğiniz genişlik
-    const int TARGET_HEIGHT = 480; // İstediğiniz yükseklik
-
-    try
+    void publish()
     {
-        ros::Rate loop_rate(15);
-        int count = 0;
-        while (ros::ok())
+        std::string cam_type = args_["camera-type"].as<std::string>();
+        ROS_INFO("Camera type - %s \n", cam_type.c_str());
+        ROS_INFO("Starting to publish images");
+
+        // İstediğiniz hedef çözünürlüğü belirleyin
+        const int TARGET_WIDTH = 640;  // İstediğiniz genişlik
+        const int TARGET_HEIGHT = 480; // İstediğiniz yükseklik
+
+        try
         {
-            dwTime_t timeout = 132000; 
-            dwCameraFrameHandle_t frame;
-            uint32_t camera_sibling_id = 0;
-            dwImageHandle_t frame_yuv;
-            dwImageNvMedia* nvmedia_yuv_img_ptr;
-            dwImageNvMedia* nvmedia_rgb_img_ptr;
-
-            sensor_msgs::ImagePtr ros_img_ptr = boost::make_shared<sensor_msgs::Image>(); // Her yineleme için yeni bir mesaj oluştur
-            std_msgs::Header header;
-            header.seq = count;
-            header.stamp = ros::Time::now(); 
-            
-            // Kameradan oku
-            CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, camera_sibling_id, timeout, camera_));
-
-            // YUV'dan RGB'ye dönüştür
-            CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
-            CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
-            CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
-            CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_yuv, sdk_));
-            CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
-
-            // NvMedia görüntüsünü kilitleyerek verisine erişim
-            NvMediaImageSurfaceMap surfaceMap;
-            if (NvMediaImageLock(nvmedia_rgb_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
+            ros::Rate loop_rate(15);
+            int count = 0;
+            while (ros::ok())
             {
-                // Görüntü boyutlarını al
-                int original_height = nvmedia_rgb_img_ptr->prop.height;
-                int original_width = nvmedia_rgb_img_ptr->prop.width;
+                dwTime_t timeout = 132000; 
+                dwCameraFrameHandle_t frame;
+                uint32_t camera_sibling_id = 0;
+                dwImageHandle_t frame_yuv;
+                dwImageNvMedia* nvmedia_yuv_img_ptr;
+                dwImageNvMedia* nvmedia_rgb_img_ptr;
+
+                sensor_msgs::ImagePtr ros_img_ptr = boost::make_shared<sensor_msgs::Image>(); // Her yineleme için yeni bir mesaj oluştur
+                std_msgs::Header header;
+                header.seq = count;
+                header.stamp = ros::Time::now(); 
                 
-                // NvMedia tamponundan OpenCV Mat oluştur (RGBA formatı)
-                cv::Mat original_image(original_height, original_width, CV_8UC4, surfaceMap.surface[0].mapping);
-                
-                // Hedef çözünürlükte bir Mat oluştur
-                cv::Mat resized_image;
-                cv::resize(original_image, resized_image, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, cv::INTER_LINEAR);
-                
-                // OpenCV Mat'i ROS mesajına manuel olarak dönüştür
-                ros_img_ptr->header = header;
-                ros_img_ptr->height = TARGET_HEIGHT;
-                ros_img_ptr->width = TARGET_WIDTH;
-                ros_img_ptr->encoding = sensor_msgs::image_encodings::RGBA8;
-                ros_img_ptr->is_bigendian = false;
-                ros_img_ptr->step = TARGET_WIDTH * 4; // 4 kanal (RGBA) = 4 byte per pixel
-                
-                // Boyutlandırılmış görüntü verilerini kopyala
-                size_t img_size = ros_img_ptr->step * TARGET_HEIGHT;
-                ros_img_ptr->data.resize(img_size);
-                
-                // Görüntü verilerini kopyala (sürekli bellek düzenindeyse doğrudan kopyalayabiliriz)
-                if(resized_image.isContinuous()) {
-                    memcpy(&ros_img_ptr->data[0], resized_image.data, img_size);
-                } else {
-                    // Sürekli değilse satır satır kopyala
-                    for(int i = 0; i < TARGET_HEIGHT; i++) {
-                        memcpy(&ros_img_ptr->data[i * ros_img_ptr->step], 
-                               resized_image.ptr<uchar>(i), 
-                               TARGET_WIDTH * 4);
+                // Kameradan oku
+                CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, camera_sibling_id, timeout, camera_));
+
+                // YUV'dan RGB'ye dönüştür
+                CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
+                CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
+                CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
+                CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_yuv, sdk_));
+                CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
+
+                // NvMedia görüntüsünü kilitleyerek verisine erişim
+                NvMediaImageSurfaceMap surfaceMap;
+                if (NvMediaImageLock(nvmedia_rgb_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
+                {
+                    // Görüntü boyutlarını al
+                    int original_height = nvmedia_rgb_img_ptr->prop.height;
+                    int original_width = nvmedia_rgb_img_ptr->prop.width;
+                    
+                    // NvMedia tamponundan OpenCV Mat oluştur (RGBA formatı)
+                    cv::Mat original_image(original_height, original_width, CV_8UC4, surfaceMap.surface[0].mapping);
+                    
+                    // Hedef çözünürlükte bir Mat oluştur
+                    cv::Mat resized_image;
+                    cv::resize(original_image, resized_image, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, cv::INTER_LINEAR);
+                    
+                    // OpenCV Mat'i ROS mesajına manuel olarak dönüştür
+                    ros_img_ptr->header = header;
+                    ros_img_ptr->height = TARGET_HEIGHT;
+                    ros_img_ptr->width = TARGET_WIDTH;
+                    ros_img_ptr->encoding = sensor_msgs::image_encodings::RGBA8;
+                    ros_img_ptr->is_bigendian = false;
+                    ros_img_ptr->step = TARGET_WIDTH * 4; // 4 kanal (RGBA) = 4 byte per pixel
+                    
+                    // Boyutlandırılmış görüntü verilerini kopyala
+                    size_t img_size = ros_img_ptr->step * TARGET_HEIGHT;
+                    ros_img_ptr->data.resize(img_size);
+                    
+                    // Görüntü verilerini kopyala (sürekli bellek düzenindeyse doğrudan kopyalayabiliriz)
+                    if(resized_image.isContinuous()) {
+                        memcpy(&ros_img_ptr->data[0], resized_image.data, img_size);
+                    } else {
+                        // Sürekli değilse satır satır kopyala
+                        for(int i = 0; i < TARGET_HEIGHT; i++) {
+                            memcpy(&ros_img_ptr->data[i * ros_img_ptr->step], 
+                                   resized_image.ptr<uchar>(i), 
+                                   TARGET_WIDTH * 4);
+                        }
                     }
+                    
+                    // Yeniden boyutlandırılmış görüntüyü yayınla
+                    gmsl_pub_img_.publish(ros_img_ptr);
+                    
+                    // NvMedia görüntüsünün kilidini aç
+                    NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
                 }
                 
-                // Yeniden boyutlandırılmış görüntüyü yayınla
-                gmsl_pub_img_.publish(ros_img_ptr);
+                // Temizlik
+                CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));       
+                CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
                 
-                // NvMedia görüntüsünün kilidini aç
-                NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
+                ros::spinOnce();
+                loop_rate.sleep();
+                ++count;
             }
-            
-            // Temizlik
-            CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));       
-            CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
-            
-            ros::spinOnce();
-            loop_rate.sleep();
-            ++count;
+        }
+        catch (std::runtime_error &e)
+        {
+            std::cerr << e.what() << "\n";
         }
     }
-    catch (std::runtime_error &e)
-    {
-        std::cerr << e.what() << "\n";
-    }
-}
-
-
+};
 
 //------------------------------------------------------------------------------
 int main(int argc, const char *argv[])
