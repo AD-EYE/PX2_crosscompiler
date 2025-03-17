@@ -75,7 +75,10 @@ private:
 public:
     CameraGMSL(const po::variables_map args): args_(args)
     {
-
+        // ROS NodeHandle oluştur - ros::init zaten main içinde çağrıldı
+        gmsl_pub_img_ = nh_.advertise<sensor_msgs::Image>("camera_1/image_raw", 1);
+        ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
+        ROS_INFO("Successfully initialized ROS publisher\n");
     
         // -----------------------------------------
         // Initialize DriveWorks context and SAL
@@ -87,7 +90,6 @@ public:
 
             // create HAL module of the SDK
             CHECK_DW_ERROR(dwSAL_initialize(&sal_, sdk_));
-
         }
 
         //------------------------------------------------------------------------------
@@ -95,8 +97,6 @@ public:
         // - the SensorCamera module
         // -----------------------------------------
         {
-
-
             dwSensorParams params;
             std::string parameter_string = std::string("output-format=yuv,fifo-size=3");
 
@@ -138,19 +138,6 @@ public:
             CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera_properties_, camera_));
             ROS_INFO("Successfully initialized camera with resolution of %dx%d at framerate of %f FPS\n",
                 camera_properties_.resolution.x, camera_properties_.resolution.y, camera_properties_.framerate);
-
-        }
-
-         //ROS initialization
-        {
-            ros::VP_string ros_str;
-            ros::init(ros_str, "camera_gmsl");
-            ros::NodeHandle n;
-            nh_ = n;
-            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw", 1);
-
-            ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
-            ROS_INFO("Successfully initialized ros\n" );
         }
 
         //Nvmedia initialization
@@ -160,10 +147,9 @@ public:
             rgb_img_prop.width = camera_properties_.resolution.x;
             rgb_img_prop.type = DW_IMAGE_NVMEDIA;
             rgb_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
-            CHECK_DW_ERROR(dwImage_create(&frame_rgb_,  rgb_img_prop,sdk_	));
-            ROS_INFO("Successfully initialized nvmedia img.\n" );
+            CHECK_DW_ERROR(dwImage_create(&frame_rgb_, rgb_img_prop, sdk_));
+            ROS_INFO("Successfully initialized nvmedia img.\n");
         }
-        
     }
 
     ~CameraGMSL()
@@ -180,7 +166,6 @@ public:
         dwSAL_release(&sal_);
         dwRelease(&sdk_);
         dwLogger_release();
-
     }
 
     void publish()
@@ -307,7 +292,10 @@ public:
 //------------------------------------------------------------------------------
 int main(int argc, const char *argv[])
 {
-
+    // İlk önce ROS'u başlat
+    ros::init(argc, argv, "camera_gmsl");
+    
+    // Sonra argümanları işle
     po::options_description desc{"Options"};
     desc.add_options()
         ("help,h", "Help screen")
