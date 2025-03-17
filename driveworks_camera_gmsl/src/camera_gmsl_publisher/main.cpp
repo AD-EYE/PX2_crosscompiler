@@ -152,7 +152,7 @@ public:
         //Nvmedia initialization
         {
             dwImageProperties rgb_img_prop{};
-            rgb_img_prop.height = 1208;
+            rgb_img_prop.height = 1207;
             rgb_img_prop.width = 1920;
             rgb_img_prop.type = DW_IMAGE_NVMEDIA;
             rgb_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
