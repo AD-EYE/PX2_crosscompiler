@@ -143,7 +143,7 @@ public:
             ros::VP_string ros_str;
             ros::init(ros_str, "camera_gmsl");
             ros::NodeHandle n;
-            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw", 1);
+            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw_sam", 1);
 
             ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
             ROS_INFO("Successfully initialized ros\n" );
