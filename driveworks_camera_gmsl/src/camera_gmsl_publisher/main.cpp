@@ -182,9 +182,9 @@ public:
             nh_.getParam("resolution_ratio", resolution_ratio);
         } 
         // Otherwise use command line argument if available
-        else if (args_.count("resolution-ratio")) {
-            resolution_ratio = args_["resolution-ratio"].as<float>();
-        }
+        //else if (args_.count("resolution-ratio")) {
+        //    resolution_ratio = args_["resolution-ratio"].as<float>();
+       // }
         
         // Validate the ratio
         if (resolution_ratio <= 0.0f || resolution_ratio > 1.0f) {
