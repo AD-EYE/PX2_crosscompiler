@@ -35,6 +35,10 @@
 
 #include <boost/program_options.hpp>
 
+// OpenCV
+#include <opencv2/opencv.hpp>
+#include <cv_bridge/cv_bridge.h>
+
 
 #define CHECK_DW_ERROR(x) { \
                     dwStatus result = x; \
@@ -143,7 +147,7 @@ public:
             ros::VP_string ros_str;
             ros::init(ros_str, "camera_gmsl");
             ros::NodeHandle n;
-            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw_sam", 1);
+            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw", 1);
 
             ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
             ROS_INFO("Successfully initialized ros\n" );
@@ -152,8 +156,8 @@ public:
         //Nvmedia initialization
         {
             dwImageProperties rgb_img_prop{};
-            rgb_img_prop.height = 1207;
-            rgb_img_prop.width = 1920;
+            rgb_img_prop.height = camera_properties_.resolution.y;
+            rgb_img_prop.width = camera_properties_.resolution.x;
             rgb_img_prop.type = DW_IMAGE_NVMEDIA;
             rgb_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
             CHECK_DW_ERROR(dwImage_create(&frame_rgb_,  rgb_img_prop,sdk_	));
@@ -179,78 +183,87 @@ public:
 
     }
 
-    void publish()
+void publish()
+{
+    std::string cam_type = args_["camera-type"].as<std::string>();
+    ROS_INFO("Camera type - %s \n", cam_type.c_str());
+    ROS_INFO("Starting to publish images");
+
+    // Define your target resolution here
+    const int TARGET_WIDTH = 640;  // Change to your desired width
+    const int TARGET_HEIGHT = 480; // Change to your desired height
+
+    try
     {
-        std::string cam_type = args_["camera-type"].as<std::string>();
-        ROS_INFO("Camera type - %s \n", cam_type.c_str());
-        ROS_INFO("Starting to publish images");
-
-        try
+        ros::Rate loop_rate(15);
+        int count = 0;
+        while (ros::ok())
         {
-            ros::Rate loop_rate(15);
-            int count = 0;
-            while (ros::ok())
+            dwTime_t timeout = 132000; 
+            dwCameraFrameHandle_t frame;
+            uint32_t camera_sibling_id = 0;
+            dwImageHandle_t frame_yuv;
+            dwImageNvMedia* nvmedia_yuv_img_ptr;
+            dwImageNvMedia* nvmedia_rgb_img_ptr;
+
+            // read from camera
+            CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, camera_sibling_id, timeout, camera_));
+
+            // Get YUV frame and convert to RGB as before
+            CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
+            CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
+            CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
+            CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_yuv, sdk_));
+            CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
+
+            // Create header for ROS message
+            std_msgs::Header header;
+            header.seq = count;
+            header.stamp = ros::Time::now(); 
+            
+            // Lock NvMedia image to access its data
+            NvMediaImageSurfaceMap surfaceMap;
+            if (NvMediaImageLock(nvmedia_rgb_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
             {
-                dwTime_t timeout = 132000; 
-                dwCameraFrameHandle_t frame;
-                uint32_t camera_sibling_id = 0;
-                dwImageHandle_t frame_yuv;
-                dwImageNvMedia* nvmedia_yuv_img_ptr;
-                dwImageNvMedia* nvmedia_rgb_img_ptr;
-
-                sensor_msgs::Image &img_msg = *ros_img_ptr_; // >> message to be sent
-                std_msgs::Header header; // empty header
-                size_t img_size;
-
+                // Get image dimensions
+                int original_height = nvmedia_rgb_img_ptr->prop.height;
+                int original_width = nvmedia_rgb_img_ptr->prop.width;
                 
-                // read from camera will update the low level buffers frame of the camera
-                // those frames are images with NATIVE properties that depend on the type and sensor properties set at creation
-                CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, camera_sibling_id, timeout, camera_));
-
-                CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
-                CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
-                CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
-                CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_yuv, sdk_));
-                CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
-
+                // Create OpenCV Mat from NvMedia buffer (RGBA format)
+                cv::Mat original_image(original_height, original_width, CV_8UC4, surfaceMap.surface[0].mapping);
                 
-                header.seq = count; // user defined counter
-                header.stamp = ros::Time::now(); 
-                    
-                img_msg.header = header;
-                img_msg.height = nvmedia_rgb_img_ptr->prop.height;
-                img_msg.width = nvmedia_rgb_img_ptr->prop.width;
-                img_msg.encoding = sensor_msgs::image_encodings::RGBA8;
+                // Create a destination Mat with the target resolution
+                cv::Mat resized_image;
+                cv::resize(original_image, resized_image, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, cv::INTER_LINEAR);
                 
-                img_msg.step = img_msg.width * 4; // 1 Byte per 4 Channels of the RGBA format
-
-                img_size = img_msg.step * img_msg.height;
-                img_msg.data.resize(img_size);
-                    NvMediaImageSurfaceMap surfaceMap;
-                if (NvMediaImageLock(nvmedia_rgb_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
-                {
-                        unsigned char* buffer = (unsigned char*)surfaceMap.surface[0].mapping;
-                        memcpy((char *)( &img_msg.data[0] ) , buffer , img_size);
-                        gmsl_pub_img_.publish(ros_img_ptr_);
-                        NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
-                }
-                //   cleanup
-                CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));       
-                // return frame
-                CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
-                ros::spinOnce();
-                loop_rate.sleep();
-                ++count;
+                // Convert OpenCV Mat to ROS Image message
+                sensor_msgs::ImagePtr resized_msg = cv_bridge::CvImage(header, 
+                                                                     sensor_msgs::image_encodings::RGBA8, 
+                                                                     resized_image).toImageMsg();
+                
+                // Publish the resized image
+                gmsl_pub_img_.publish(resized_msg);
+                
+                // Unlock NvMedia image
+                NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
             }
+            
+            // Cleanup
+            CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));       
+            CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
+            
+            ros::spinOnce();
+            loop_rate.sleep();
+            ++count;
         }
-        catch (std::runtime_error &e)
-        {
-            std::cerr << e.what() << "\n";
-        }
-        
     }
+    catch (std::runtime_error &e)
+    {
+        std::cerr << e.what() << "\n";
+    }
+}
 
-};
+
 
 //------------------------------------------------------------------------------
 int main(int argc, const char *argv[])
