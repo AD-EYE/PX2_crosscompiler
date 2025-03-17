@@ -69,24 +69,12 @@ private:
     dwImageProperties camera_image_properties_;
     dwCameraProperties camera_properties_;
 
-    // Resolution properties
-    float resolution_ratio_;
-
     po::variables_map args_;
      
 public:
     CameraGMSL(const po::variables_map args): args_(args)
     {
 
-        // Get resolution ratio parameter (between 0.0 and 1.0)
-        resolution_ratio_ = args_["resolution-ratio"].as<float>();
-        
-        // Validate the ratio is between 0.0 and 1.0
-        if (resolution_ratio_ <= 0.0f || resolution_ratio_ > 1.0f) {
-            ROS_WARN("Invalid resolution ratio %.2f. Must be between 0.0 and 1.0. Using 1.0 (full resolution).", resolution_ratio_);
-            resolution_ratio_ = 1.0f;
-        }
-        
     
         // -----------------------------------------
         // Initialize DriveWorks context and SAL
@@ -157,7 +145,7 @@ public:
             ros::VP_string ros_str;
             ros::init(ros_str, "camera_gmsl");
             ros::NodeHandle n;
-            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw_ismail", 1);
+            gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_raw", 1);
 
             ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
             ROS_INFO("Successfully initialized ros\n" );
@@ -199,9 +187,9 @@ public:
         ROS_INFO("Camera type - %s \n", cam_type.c_str());
         ROS_INFO("Starting to publish images");
 
-        // Set the desired target resolution  
-        const int TARGET_WIDTH = camera_properties_.resolution.x * resolution_ratio_;  // Desired width
-        const int TARGET_HEIGHT = camera_properties_.resolution.y; // Desired Height
+        // İstediğiniz hedef çözünürlüğü belirleyin
+        const int TARGET_WIDTH = 640;  // İstediğiniz genişlik
+        const int TARGET_HEIGHT = 480; // İstediğiniz yükseklik
 
         try
         {
@@ -216,53 +204,53 @@ public:
                 dwImageNvMedia* nvmedia_yuv_img_ptr;
                 dwImageNvMedia* nvmedia_rgb_img_ptr;
 
-                sensor_msgs::ImagePtr ros_img_ptr = boost::make_shared<sensor_msgs::Image>(); // Create a new message for each iteration
+                sensor_msgs::ImagePtr ros_img_ptr = boost::make_shared<sensor_msgs::Image>(); // Her yineleme için yeni bir mesaj oluştur
                 std_msgs::Header header;
                 header.seq = count;
                 header.stamp = ros::Time::now(); 
                 
-                // Read from the camera
+                // Kameradan oku
                 CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, camera_sibling_id, timeout, camera_));
 
-                // Convert from YUV to RGB
+                // YUV'dan RGB'ye dönüştür
                 CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
                 CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
                 CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_yuv, sdk_));
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
 
-                // Lock the NvMedia image to access its data
+                // NvMedia görüntüsünü kilitleyerek verisine erişim
                 NvMediaImageSurfaceMap surfaceMap;
                 if (NvMediaImageLock(nvmedia_rgb_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
                 {
-                    // Get image dimensions
+                    // Görüntü boyutlarını al
                     int original_height = nvmedia_rgb_img_ptr->prop.height;
                     int original_width = nvmedia_rgb_img_ptr->prop.width;
                     
-                    // Create an OpenCV Mat from the NvMedia buffer (RGBA format)
+                    // NvMedia tamponundan OpenCV Mat oluştur (RGBA formatı)
                     cv::Mat original_image(original_height, original_width, CV_8UC4, surfaceMap.surface[0].mapping);
                     
-                    // Create a Mat with the target resolution
+                    // Hedef çözünürlükte bir Mat oluştur
                     cv::Mat resized_image;
                     cv::resize(original_image, resized_image, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, cv::INTER_LINEAR);
                     
-                    // Manually convert the OpenCV Mat to a ROS message
+                    // OpenCV Mat'i ROS mesajına manuel olarak dönüştür
                     ros_img_ptr->header = header;
                     ros_img_ptr->height = TARGET_HEIGHT;
                     ros_img_ptr->width = TARGET_WIDTH;
                     ros_img_ptr->encoding = sensor_msgs::image_encodings::RGBA8;
                     ros_img_ptr->is_bigendian = false;
-                    ros_img_ptr->step = TARGET_WIDTH * 4; // 4 channels (RGBA) = 4 bytes per pixel
+                    ros_img_ptr->step = TARGET_WIDTH * 4; // 4 kanal (RGBA) = 4 byte per pixel
                     
-                    // Copy the resized image data
+                    // Boyutlandırılmış görüntü verilerini kopyala
                     size_t img_size = ros_img_ptr->step * TARGET_HEIGHT;
                     ros_img_ptr->data.resize(img_size);
                     
-                    // Copy the image data (if it's in continuous memory layout, we can copy it directly)
+                    // Görüntü verilerini kopyala (sürekli bellek düzenindeyse doğrudan kopyalayabiliriz)
                     if(resized_image.isContinuous()) {
                         memcpy(&ros_img_ptr->data[0], resized_image.data, img_size);
                     } else {
-                        // If not continuous, copy row by row
+                        // Sürekli değilse satır satır kopyala
                         for(int i = 0; i < TARGET_HEIGHT; i++) {
                             memcpy(&ros_img_ptr->data[i * ros_img_ptr->step], 
                                    resized_image.ptr<uchar>(i), 
@@ -270,14 +258,14 @@ public:
                         }
                     }
                     
-                    // Publish the resized image
+                    // Yeniden boyutlandırılmış görüntüyü yayınla
                     gmsl_pub_img_.publish(ros_img_ptr);
                     
-                    // Unlock the NvMedia image
+                    // NvMedia görüntüsünün kilidini aç
                     NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
                 }
                 
-                // Cleanup
+                // Temizlik
                 CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));       
                 CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
                 
@@ -311,9 +299,7 @@ int main(int argc, const char *argv[])
             "Optional parameter used only for Tegra B, enables slave mode.\n")
         ("custom-board", po::value<std::string>()-> default_value("0"), "If true, then the configuration for board and camera "
                               "will be input from the config-file\n")
-        ("custom-config", po::value<std::string>()-> default_value(""), "Set of custom board extra configuration\n")
-        ("resolution-ratio", po::value<float>()-> default_value(1.0f), 
-            "Resolution scaling ratio (0.0 to 1.0). For example, 0.5 means half the native resolution.\n");
+        ("custom-config", po::value<std::string>()-> default_value(""), "Set of custom board extra configuration\n");
 
     po::variables_map args;
     po::store(parse_command_line(argc, argv, desc), args);
