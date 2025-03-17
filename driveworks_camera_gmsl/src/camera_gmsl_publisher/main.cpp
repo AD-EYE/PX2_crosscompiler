@@ -311,7 +311,7 @@ int main(int argc, const char *argv[])
             "Optional parameter used only for Tegra B, enables slave mode.\n")
         ("custom-board", po::value<std::string>()-> default_value("0"), "If true, then the configuration for board and camera "
                               "will be input from the config-file\n")
-        ("custom-config", po::value<std::string>()-> default_value(""), "Set of custom board extra configuration\n");
+        ("custom-config", po::value<std::string>()-> default_value(""), "Set of custom board extra configuration\n")
         ("resolution-ratio", po::value<float>()-> default_value(1.0f), 
             "Resolution scaling ratio (0.0 to 1.0). For example, 0.5 means half the native resolution.\n");
 
