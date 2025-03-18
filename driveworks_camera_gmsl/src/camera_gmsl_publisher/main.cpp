@@ -175,7 +175,7 @@ public:
         ROS_INFO("Starting to publish images");
 
         // Get resolution ratio
-        float resolution_ratio;
+        float resolution_ratio = 0.14f;
         
         
         nh_.getParam("resolution_ratio", resolution_ratio);
