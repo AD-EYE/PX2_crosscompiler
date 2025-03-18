@@ -76,7 +76,7 @@ public:
     CameraGMSL(const po::variables_map args): args_(args)
     {
         // ROS NodeHandle oluştur - ros::init zaten main içinde çağrıldı
-        ros::init(ros_str, "camera_gmsl");
+        ros::init("camera_gmsl");
         gmsl_pub_img_ = nh_.advertise<sensor_msgs::Image>("camera_1/image_raw", 1);
         ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
         ROS_INFO("Successfully initialized ROS publisher\n");
