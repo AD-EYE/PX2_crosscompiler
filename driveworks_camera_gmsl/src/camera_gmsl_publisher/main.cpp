@@ -177,20 +177,20 @@ public:
         // Get resolution ratio - first check if it's on the ROS parameter server
         float resolution_ratio = 1.0f;
         
-        // Check for ROS parameter first (priority)
-        if (nh_.hasParam("resolution_ratio")) {
-            nh_.getParam("resolution_ratio", resolution_ratio);
-        } 
+        // // Check for ROS parameter first (priority)
+        // if (nh_.hasParam("resolution_ratio")) {
+        nh_.getParam("resolution_ratio", resolution_ratio);
+        // } 
         // Otherwise use command line argument if available
         //else if (args_.count("resolution-ratio")) {
         //    resolution_ratio = args_["resolution-ratio"].as<float>();
        // }
         
-        // Validate the ratio
-        if (resolution_ratio <= 0.0f || resolution_ratio > 1.0f) {
-            ROS_WARN("Invalid resolution ratio %f. Must be between 0 and 1. Using default ratio of 1.0", resolution_ratio);
-            resolution_ratio = 1.0f;
-        }
+        // // Validate the ratio
+        // if (resolution_ratio <= 0.0f || resolution_ratio > 1.0f) {
+        //     ROS_WARN("Invalid resolution ratio %f. Must be between 0 and 1. Using default ratio of 1.0", resolution_ratio);
+        //     resolution_ratio = 1.0f;
+        // }
         
         // Calculate target resolution based on original dimensions and ratio
         const int TARGET_WIDTH = static_cast<int>(camera_properties_.resolution.x * resolution_ratio);
