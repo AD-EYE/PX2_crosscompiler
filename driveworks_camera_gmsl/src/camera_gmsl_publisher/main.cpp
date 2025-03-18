@@ -34,9 +34,6 @@
 
 #include <boost/program_options.hpp>
 
-// OpenCV
-#include <opencv2/opencv.hpp>
-
 
 #define CHECK_DW_ERROR(x) { \
                     dwStatus result = x; \
@@ -178,11 +175,12 @@ public:
         float resolution_ratio = 1.0f;
         
         // Check for ROS parameter first (priority)
-        if (nh_.hasParam("resolution_ratio")) {
-            nh_.getParam("resolution_ratio", resolution_ratio);
-        } 
+        // Use private node handle for better parameter access
+        ros::NodeHandle pnh_("~");
+        pnh_.param("resolution_ratio", resolution_ratio, 1.0f);
+        
         // Otherwise use command line argument if available
-        else if (args_.count("resolution-ratio")) {
+        if (resolution_ratio == 1.0f && args_.count("resolution-ratio")) {
             resolution_ratio = args_["resolution-ratio"].as<float>();
         }
         
@@ -197,7 +195,39 @@ public:
         const int TARGET_HEIGHT = static_cast<int>(camera_properties_.resolution.y * resolution_ratio);
         
         ROS_INFO("Using resolution ratio %f, target resolution: %dx%d", 
-                 resolution_ratio, TARGET_WIDTH, TARGET_HEIGHT);
+                resolution_ratio, TARGET_WIDTH, TARGET_HEIGHT);
+
+        // Create NvMedia 2D context for scaling operations
+        NvMedia2D* nvmedia2D = NULL;
+        NvMediaStatus nvStatus = NvMedia2DCreate(0, &nvmedia2D); // 0 = default CUDA stream
+        if (nvStatus != NVMEDIA_STATUS_OK) {
+            ROS_ERROR("Failed to create NvMedia2D context. Status: %d", nvStatus);
+            return;
+        }
+
+        // Create a destination NvMedia image for the resized output
+        NvMediaImage* resized_nvmedia_img = NULL;
+        NvMediaImageSurfaceMap surfaceMap;
+        NvMediaImageSurfaceMap dstSurfaceMap;
+
+        // Define surface attributes for the resized image (same format as source)
+        NvMediaSurfFormatAttr surfAttrs[NVM_SURF_FMT_ATTR_MAX];
+        surfAttrs[0].type = NVM_SURF_FMT_ATTR_SUB_SAMPLING_TYPE;
+        surfAttrs[0].value = NVM_SURF_FMT_SUB_SAMPLING_TYPE_444;
+        surfAttrs[1].type = NVM_SURF_FMT_ATTR_MEMORY_TYPE;
+        surfAttrs[1].value = NVM_SURF_FMT_ATTR_MEMORY_PITCH;
+
+        // Create the resized NvMedia image
+        resized_nvmedia_img = NvMediaImageCreate(NvMediaSurfaceFormatGetType(NVM_SURF_FMT_SET_ATTR_RGBA,
+                                                                          surfAttrs, 2),
+                                              TARGET_WIDTH, TARGET_HEIGHT,
+                                              0); // 0 = default flags
+
+        if (!resized_nvmedia_img) {
+            ROS_ERROR("Failed to create resized NvMedia image");
+            NvMedia2DDestroy(nvmedia2D);
+            return;
+        }
 
         try
         {
@@ -228,48 +258,61 @@ public:
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
 
                 // NvMedia görüntüsünü kilitleyerek verisine erişim
-                NvMediaImageSurfaceMap surfaceMap;
                 if (NvMediaImageLock(nvmedia_rgb_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
                 {
-                    // Görüntü boyutlarını al
-                    int original_height = nvmedia_rgb_img_ptr->prop.height;
-                    int original_width = nvmedia_rgb_img_ptr->prop.width;
+                    // Kaynak ve hedef NvMedia dikdörtgenleri tanımla
+                    NvMediaRect srcRect, dstRect;
+                    srcRect.x = 0;
+                    srcRect.y = 0;
+                    srcRect.width = nvmedia_rgb_img_ptr->prop.width;
+                    srcRect.height = nvmedia_rgb_img_ptr->prop.height;
                     
-                    // NvMedia tamponundan OpenCV Mat oluştur (RGBA formatı)
-                    cv::Mat original_image(original_height, original_width, CV_8UC4, surfaceMap.surface[0].mapping);
-                    
-                    // Hedef çözünürlükte bir Mat oluştur
-                    cv::Mat resized_image;
-                    cv::resize(original_image, resized_image, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, cv::INTER_LINEAR);
-                    
-                    // OpenCV Mat'i ROS mesajına manuel olarak dönüştür
-                    ros_img_ptr->header = header;
-                    ros_img_ptr->height = TARGET_HEIGHT;
-                    ros_img_ptr->width = TARGET_WIDTH;
-                    ros_img_ptr->encoding = sensor_msgs::image_encodings::RGBA8;
-                    ros_img_ptr->is_bigendian = false;
-                    ros_img_ptr->step = TARGET_WIDTH * 4; // 4 kanal (RGBA) = 4 byte per pixel
-                    
-                    // Boyutlandırılmış görüntü verilerini kopyala
-                    size_t img_size = ros_img_ptr->step * TARGET_HEIGHT;
-                    ros_img_ptr->data.resize(img_size);
-                    
-                    // Görüntü verilerini kopyala (sürekli bellek düzenindeyse doğrudan kopyalayabiliriz)
-                    if(resized_image.isContinuous()) {
-                        memcpy(&ros_img_ptr->data[0], resized_image.data, img_size);
-                    } else {
-                        // Sürekli değilse satır satır kopyala
-                        for(int i = 0; i < TARGET_HEIGHT; i++) {
-                            memcpy(&ros_img_ptr->data[i * ros_img_ptr->step], 
-                                   resized_image.ptr<uchar>(i), 
-                                   TARGET_WIDTH * 4);
+                    dstRect.x = 0;
+                    dstRect.y = 0;
+                    dstRect.width = TARGET_WIDTH;
+                    dstRect.height = TARGET_HEIGHT;
+
+                    // Hedef görüntüyü yazma erişimi için kilitle
+                    if (NvMediaImageLock(resized_nvmedia_img, NVMEDIA_IMAGE_ACCESS_WRITE, &dstSurfaceMap) == NVMEDIA_STATUS_OK) 
+                    {
+                        // NvMedia2D kullanarak ölçeklendirme işlemi
+                        NvMedia2DBlitParams blitParams;
+                        memset(&blitParams, 0, sizeof(blitParams));
+                        
+                        blitParams.srcRect = &srcRect;
+                        blitParams.dstRect = &dstRect;
+                        blitParams.filterMode = NVMEDIA_2D_FILTER_BILINEAR; // İki doğrusal filtreleme
+
+                        // Ölçeklendirme işlemi
+                        nvStatus = NvMedia2DBlit(nvmedia2D, resized_nvmedia_img, nvmedia_rgb_img_ptr->img, &blitParams);
+                        
+                        if (nvStatus != NVMEDIA_STATUS_OK) {
+                            ROS_ERROR("NvMedia2DBlit failed with status: %d", nvStatus);
+                        } else {
+                            // Boyutlandırılmış görüntüyü ROS mesajına dönüştür
+                            ros_img_ptr->header = header;
+                            ros_img_ptr->height = TARGET_HEIGHT;
+                            ros_img_ptr->width = TARGET_WIDTH;
+                            ros_img_ptr->encoding = sensor_msgs::image_encodings::RGBA8;
+                            ros_img_ptr->is_bigendian = false;
+                            ros_img_ptr->step = TARGET_WIDTH * 4; // 4 kanal (RGBA) = 4 byte per pixel
+                            
+                            // Boyutlandırılmış görüntü verilerini kopyala
+                            size_t img_size = ros_img_ptr->step * TARGET_HEIGHT;
+                            ros_img_ptr->data.resize(img_size);
+                            
+                            // Görüntü verilerini kopyala
+                            memcpy(&ros_img_ptr->data[0], dstSurfaceMap.surface[0].mapping, img_size);
+                            
+                            // Yeniden boyutlandırılmış görüntüyü yayınla
+                            gmsl_pub_img_.publish(ros_img_ptr);
                         }
+                        
+                        // Hedef görüntü kilidini aç
+                        NvMediaImageUnlock(resized_nvmedia_img);
                     }
                     
-                    // Yeniden boyutlandırılmış görüntüyü yayınla
-                    gmsl_pub_img_.publish(ros_img_ptr);
-                    
-                    // NvMedia görüntüsünün kilidini aç
+                    // Kaynak görüntü kilidini aç
                     NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
                 }
                 
@@ -286,17 +329,25 @@ public:
         {
             std::cerr << e.what() << "\n";
         }
+
+        // Temizlik
+        if (resized_nvmedia_img) {
+            NvMediaImageDestroy(resized_nvmedia_img);
+        }
+        
+        if (nvmedia2D) {
+            NvMedia2DDestroy(nvmedia2D);
+        }
     }
 };
 
 //------------------------------------------------------------------------------
 int main(int argc, char **argv)
 {
-    // İlk önce ROS'u başlat - artık argv tipimiz char** olduğu için uyumlu
+    // İlk önce ROS'u başlat
     ros::init(argc, argv, "camera_gmsl");
     
-    // Sonra argümanları işle - bu kısmı değiştirmemiz gerekiyor çünkü 
-    // artık argv türü const char** değil, char**
+    // Sonra argümanları işle
     po::options_description desc{"Options"};
     desc.add_options()
         ("help,h", "Help screen")
@@ -316,7 +367,7 @@ int main(int argc, char **argv)
 
     po::variables_map args;
     
-    // Boost program_options ile const char** yerine char** kullanmak
+    // Boost program_options ile char** kullanmak
     po::store(po::parse_command_line(argc, const_cast<const char**>(argv), desc), args);
     po::notify(args);
 
