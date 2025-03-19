@@ -5,6 +5,7 @@
                          --custom-board=[0|1]
                          --custom-config=[desAddr=0xNN,brdcstSerAddr=0xMM,i2cDevice=X]
                          --tegra-slave=[0|1]
+                         --resolution-ratio=[between 0 and 1]
 
 Where:
 
@@ -34,6 +35,11 @@ Where:
         but it requires that camera to run at the same time from Tegra A. If slave is false, 
         then Tegra B can control any camera that is not currently being used by Tegra A.
         Default value: 0
+    
+    --resolution-ratio=[between 0 and 1]
+        It adjusts the resolution of the GMSL camera dynamically using OpenCV.
+        This allows setting a resolution ratio between 0 and 1.
+        Default value: 1 (Full Resolution: 1920*1208).
 
 
 #### Run on Tegra B in slave mode
@@ -45,6 +51,15 @@ Cameras can be captured on Tegra B in slave mode, i.e. when they are already cap
 It's possible to set addresses and other custom properties if the board is custom. In order to do so, the flag custom-board needs to be set to 1 and --custom-config needs to be set like the following way:
 
     ./camera_gmsl_publisher --custom-board=1 --custom-config="desAddr=0x48,brdcstSerAddr=0x40,i2cDevice=7"
+
+#### Change the resolution
+The resolution can be set through the ROS parameter resolution_ratio, which takes priority over the command-line argument if both are specified:
+    Launch example (ROS Parameter):
+        <node pkg="adeye" type="camera_gmsl_publisher" name="camera_gmsl_publisher">
+            <param name="resolution_ratio" value="0.25"/>
+        </node>
+    Launch example (Cmmand Line Args):
+        <node pkg="adeye" type="camera_gmsl_publisher" name="camera_gmsl_publisher" respawn="true" args="--resolution-ratio=0.5"/>
 
 Currently, the parameters metioned in the templated are the only ones customizable through this feature.
 

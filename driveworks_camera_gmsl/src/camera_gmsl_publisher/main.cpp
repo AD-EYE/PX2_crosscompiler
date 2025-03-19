@@ -75,7 +75,7 @@ private:
 public:
     CameraGMSL(const po::variables_map args): args_(args)
     {
-        // ROS NodeHandle oluştur - ros::init zaten main içinde çağrıldı
+        // Create ROS NodeHandle - ros::init is already called inside main
         gmsl_pub_img_ = nh_.advertise<sensor_msgs::Image>("camera_1/image_raw", 1);
         ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
         ROS_INFO("Successfully initialized ROS publisher\n");
@@ -212,53 +212,53 @@ public:
                 dwImageNvMedia* nvmedia_yuv_img_ptr;
                 dwImageNvMedia* nvmedia_rgb_img_ptr;
 
-                sensor_msgs::ImagePtr ros_img_ptr = boost::make_shared<sensor_msgs::Image>(); // Her yineleme için yeni bir mesaj oluştur
+                sensor_msgs::ImagePtr ros_img_ptr = boost::make_shared<sensor_msgs::Image>(); // Create a new message for each iteration
                 std_msgs::Header header;
                 header.seq = count;
                 header.stamp = ros::Time::now(); 
                 
-                // Kameradan oku
+                // Read from the camera
                 CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, camera_sibling_id, timeout, camera_));
 
-                // YUV'dan RGB'ye dönüştür
+                // Convert from YUV to RGB
                 CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
                 CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
                 CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_yuv, sdk_));
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
 
-                // NvMedia görüntüsünü kilitleyerek verisine erişim
+                // Access NvMedia image data by locking the image
                 NvMediaImageSurfaceMap surfaceMap;
                 if (NvMediaImageLock(nvmedia_rgb_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
                 {
-                    // Görüntü boyutlarını al
+                    // Get image dimensions
                     int original_height = nvmedia_rgb_img_ptr->prop.height;
                     int original_width = nvmedia_rgb_img_ptr->prop.width;
                     
-                    // NvMedia tamponundan OpenCV Mat oluştur (RGBA formatı)
+                    // Create an OpenCV Mat from the NvMedia buffer (RGBA format)
                     cv::Mat original_image(original_height, original_width, CV_8UC4, surfaceMap.surface[0].mapping);
                     
-                    // Hedef çözünürlükte bir Mat oluştur
+                    // Create a Mat with the target resolution
                     cv::Mat resized_image;
                     cv::resize(original_image, resized_image, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, cv::INTER_LINEAR);
                     
-                    // OpenCV Mat'i ROS mesajına manuel olarak dönüştür
+                    // Manually convert OpenCV Mat to a ROS message
                     ros_img_ptr->header = header;
                     ros_img_ptr->height = TARGET_HEIGHT;
                     ros_img_ptr->width = TARGET_WIDTH;
                     ros_img_ptr->encoding = sensor_msgs::image_encodings::RGBA8;
                     ros_img_ptr->is_bigendian = false;
-                    ros_img_ptr->step = TARGET_WIDTH * 4; // 4 kanal (RGBA) = 4 byte per pixel
+                    ros_img_ptr->step = TARGET_WIDTH * 4; // 4 channels (RGBA) = 4 bytes per pixel
                     
-                    // Boyutlandırılmış görüntü verilerini kopyala
+                    // Copy the resized image data
                     size_t img_size = ros_img_ptr->step * TARGET_HEIGHT;
                     ros_img_ptr->data.resize(img_size);
                     
-                    // Görüntü verilerini kopyala (sürekli bellek düzenindeyse doğrudan kopyalayabiliriz)
+                    // Copy the image data (if it's in continuous memory layout, we can copy directly)
                     if(resized_image.isContinuous()) {
                         memcpy(&ros_img_ptr->data[0], resized_image.data, img_size);
                     } else {
-                        // Sürekli değilse satır satır kopyala
+                        // If it's not continuous, copy row by row
                         for(int i = 0; i < TARGET_HEIGHT; i++) {
                             memcpy(&ros_img_ptr->data[i * ros_img_ptr->step], 
                                    resized_image.ptr<uchar>(i), 
@@ -266,14 +266,14 @@ public:
                         }
                     }
                     
-                    // Yeniden boyutlandırılmış görüntüyü yayınla
+                    // Publish the resized image
                     gmsl_pub_img_.publish(ros_img_ptr);
                     
-                    // NvMedia görüntüsünün kilidini aç
+                    // Unlock the NvMedia image
                     NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
                 }
                 
-                // Temizlik
+                // Cleanup
                 CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));       
                 CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
                 
@@ -292,11 +292,11 @@ public:
 //------------------------------------------------------------------------------
 int main(int argc, char **argv)
 {
-    // İlk önce ROS'u başlat - artık argv tipimiz char** olduğu için uyumlu
+    // First, initialize ROS - now that our argv type is char**, it's compatible
     ros::init(argc, argv, "camera_gmsl");
     
-    // Sonra argümanları işle - bu kısmı değiştirmemiz gerekiyor çünkü 
-    // artık argv türü const char** değil, char**
+    // Then process the arguments - we need to modify this part because 
+    // the argv type is now char**, not const char**
     po::options_description desc{"Options"};
     desc.add_options()
         ("help,h", "Help screen")
@@ -316,7 +316,7 @@ int main(int argc, char **argv)
 
     po::variables_map args;
     
-    // Boost program_options ile const char** yerine char** kullanmak
+    // Using char** instead of const char** with Boost program_options
     po::store(po::parse_command_line(argc, const_cast<const char**>(argv), desc), args);
     po::notify(args);
 
