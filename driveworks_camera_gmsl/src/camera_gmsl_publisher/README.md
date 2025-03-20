@@ -54,14 +54,14 @@ It's possible to set addresses and other custom properties if the board is custo
 
 #### Change the resolution
 The resolution can be set through the ROS parameter resolution_ratio, which takes priority over the command-line argument if both are specified:
-    Launch example (ROS Parameter):
-        <node pkg="adeye" type="camera_gmsl_publisher" name="camera_gmsl_publisher">
-            <param name="resolution_ratio" value="0.25"/>
-        </node>
-    Launch example (Cmmand Line Args):
-        <node pkg="adeye" type="camera_gmsl_publisher" name="camera_gmsl_publisher" respawn="true" args="--resolution-ratio=0.5"/>
+Launch example (ROS Parameter):
+        
+    <node pkg="adeye" type="camera_gmsl_publisher" name="camera_gmsl_publisher">
+        <param name="resolution_ratio" value="0.25"/>
+    </node>
+
+Launch example (Cmmand Line Args):
+        
+    <node pkg="adeye" type="camera_gmsl_publisher" name="camera_gmsl_publisher" respawn="true" args="--resolution-ratio=0.5"/>
 
 Currently, the parameters metioned in the templated are the only ones customizable through this feature.
-
-
-
