@@ -227,12 +227,12 @@ public:
                 {
                     unsigned char* buffer = (unsigned char*)surfaceMap.surface[0].mapping;
                     
-                    // Downsample by skipping pixels
-                    for (int y = 0; y < half_res_img.height; y++) {
-                        for (int x = 0; x < half_res_img.width; x++) {
+                    // Downsample by skipping pixels - using size_t to avoid signed/unsigned comparison
+                    for (size_t y = 0; y < half_res_img.height; y++) {
+                        for (size_t x = 0; x < half_res_img.width; x++) {
                             // Source indices (full resolution)
-                            int src_y = y * 2;
-                            int src_x = x * 2;
+                            size_t src_y = y * 2;
+                            size_t src_x = x * 2;
                             
                             // Calculate pixel positions
                             size_t half_idx = (y * half_res_img.width + x) * 4;
