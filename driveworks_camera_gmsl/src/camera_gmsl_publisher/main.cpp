@@ -21,7 +21,7 @@
 // Image
 // #include <dw/image/ImageStreamer.h> // Not strictly needed here
 #include <dw/image/FormatConverter.h> // dwImage_copyConvert is here
-#include <dw/image/Image.h> // For dwImage_getProperties
+#include <dw/image/Image.h> // For dwImage_getProperties, dwImage_createAndBindNvMedia, dwImage_destroy
 
 // nvmedia for surface map
 #include <nvmedia_2d.h>
@@ -34,6 +34,7 @@
 #include <sstream>
 #include <string> // For std::to_string
 #include <stdexcept> // For std::runtime_error
+#include <memory> // **** ADDED for std::unique_ptr ****
 
 #include <boost/program_options.hpp>
 
@@ -96,7 +97,7 @@ public:
         //------------------------------------------------------------------------------
         {
             dwSensorParams params;
-            // ***** MODIFICATION: Request RGBA output directly *****
+            // ***** Request RGBA output directly *****
             std::string parameter_string = std::string("output-format=rgba,fifo-size=3");
 
             parameter_string             += std::string(",camera-type=") + args_["camera-type"].as<std::string>().c_str();
@@ -106,53 +107,60 @@ public:
              if (args_["custom-board"].as<std::string>().compare("1") == 0)
             {
                 parameter_string += ",custom-board=1";
-                // Ensure the custom-config parameter is actually used if needed by the board config
                 if (!args_["custom-config"].as<std::string>().empty()) {
                      params.auxiliarydata = args_["custom-config"].as<std::string>().c_str();
                 } else if (args_["custom-board"].as<std::string>().compare("1") == 0) {
-                    // Warn if custom board is set but no config string is provided, might be needed
                     ROS_WARN("Custom board enabled ('custom-board=1') but 'custom-config' string is empty.");
                 }
             }
 
-
             params.parameters           = parameter_string.c_str();
             params.protocol             = "camera.gmsl";
 
-            ROS_INFO("Creating sensor with parameters: %s", params.parameters); // Log parameters
+            ROS_INFO("Creating sensor with parameters: %s", params.parameters);
             CHECK_DW_ERROR(dwSAL_createSensor(&camera_, params, sal_));
             ROS_INFO("Sensor created. Starting sensor...");
             CHECK_DW_ERROR(dwSensor_start(camera_));
             ROS_INFO("Sensor started. Waiting for first frame...");
 
             // Wait for camera to be ready
-            dwCameraFrameHandle_t frame;
+            dwCameraFrameHandle_t frame = DW_NULL_HANDLE; // Initialize properly
             dwStatus status = DW_NOT_READY;
-            int retries = 10; // Increased retries slightly
+            int retries = 10;
             while ((status == DW_NOT_READY || status == DW_TIME_OUT) && retries-- > 0) {
-                 ros::Duration(0.2).sleep(); // Slightly longer sleep
-                 status = dwSensorCamera_readFrame(&frame, 0, 200000, camera_); // Increased timeout
+                 ros::Duration(0.2).sleep();
+                 status = dwSensorCamera_readFrame(&frame, 0, 200000, camera_);
                  if (status == DW_SUCCESS) {
                      ROS_INFO("First frame read successfully during init.");
                      // === Debug: Check properties of the first frame's image ===
-                     dwImageHandle_t first_img_handle;
-                     dwImageNvMedia* first_nvmedia_ptr;
+                     dwImageNvMedia* first_nvmedia_ptr = nullptr; // Initialize
                      dwStatus imgStatus = dwSensorCamera_getImageNvMedia(&first_nvmedia_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame);
-                     if (imgStatus == DW_SUCCESS) {
-                         dwImageProperties first_props;
-                         imgStatus = dwImage_getPropertiesFromNvMedia(&first_props, first_nvmedia_ptr->img);
-                         if (imgStatus == DW_SUCCESS) {
-                              ROS_INFO("Init Frame Properties: Type=%d, Format=%d, Width=%u, Height=%u",
-                                        first_props.type, first_props.format, first_props.width, first_props.height);
-                              // Check if format is indeed RGBA (DW_IMAGE_FORMAT_RGBA_UINT8 = 3)
-                              if(first_props.format != DW_IMAGE_FORMAT_RGBA_UINT8) {
-                                  ROS_WARN("Camera did not return RGBA format as requested! Actual format enum: %d", first_props.format);
-                              }
+                     if (imgStatus == DW_SUCCESS && first_nvmedia_ptr != nullptr && first_nvmedia_ptr->img != nullptr)
+                     {
+                         dwImageHandle_t temp_handle = DW_NULL_HANDLE; // Temporary handle for properties check
+                         dwStatus bindStatus = dwImage_createAndBindNvMedia(&temp_handle, first_nvmedia_ptr->img);
+                         if(bindStatus == DW_SUCCESS) {
+                             dwImageProperties first_props;
+                             dwStatus propStatus = dwImage_getProperties(&first_props, temp_handle);
+                             if (propStatus == DW_SUCCESS) {
+                                  ROS_INFO("Init Frame Properties: Type=%d, Format=%d, Width=%u, Height=%u",
+                                            first_props.type, first_props.format, first_props.width, first_props.height);
+                                  // Check if format is indeed RGBA (DW_IMAGE_FORMAT_RGBA_UINT8 = 3)
+                                  if(first_props.format != DW_IMAGE_FORMAT_RGBA_UINT8) {
+                                      ROS_WARN("Camera did not return RGBA format as requested! Actual format enum: %d", first_props.format);
+                                  }
+                             } else {
+                                  ROS_WARN("Could not get properties from temporary DW Image handle in init: %s", dwGetStatusName(propStatus));
+                             }
+                             // Destroy the temporary handle
+                             dwImage_destroy(&temp_handle); // temp_handle is now null or invalid
                          } else {
-                              ROS_WARN("Could not get properties from NvMedia Image in init: %s", dwGetStatusName(imgStatus));
+                             ROS_WARN("Could not create/bind temporary DW Image handle in init: %s", dwGetStatusName(bindStatus));
                          }
+
                      } else {
-                         ROS_WARN("Could not get NvMedia Image from first frame in init: %s", dwGetStatusName(imgStatus));
+                         ROS_WARN("Could not get NvMedia Image from first frame in init (Status: %s, Ptr: %p)",
+                                   dwGetStatusName(imgStatus), static_cast<void*>(first_nvmedia_ptr));
                      }
                      // =========================================================
                      CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame)); // Return the frame
@@ -162,17 +170,16 @@ public:
             }
             if (status != DW_SUCCESS) {
                  ROS_ERROR("Final camera status after init retries: %s", dwGetStatusName(status));
-                 dwSAL_releaseSensor(&camera_); // Clean up sensor if init failed
-                 camera_ = DW_NULL_HANDLE;
+                 if (camera_) { // Check if sensor was created before trying to release
+                    dwSAL_releaseSensor(&camera_);
+                    camera_ = DW_NULL_HANDLE;
+                 }
                  throw std::runtime_error("Camera did not start correctly or provide frames after multiple attempts.");
             }
-
 
             CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera_properties_, camera_));
             ROS_INFO("Successfully initialized camera. Native resolution reported: %dx%d at framerate: %f FPS\n",
                 camera_properties_.resolution.x, camera_properties_.resolution.y, camera_properties_.framerate);
-             // Sanity check if reported resolution matches what we got in the first frame (if debug worked)
-             // Note: camera_properties_ might reflect sensor capability, frame properties reflect actual output format resolution.
         }
 
         //------------------------------------------------------------------------------
@@ -194,11 +201,17 @@ public:
         ROS_INFO("Destructor called. Releasing resources.");
         if (camera_) {
             ROS_INFO("Stopping sensor...");
-            dwSensor_stop(camera_);
+            dwStatus stop_status = dwSensor_stop(camera_);
+            if (stop_status != DW_SUCCESS) {
+                ROS_ERROR("Error stopping sensor: %s", dwGetStatusName(stop_status));
+            }
              ROS_INFO("Releasing sensor...");
-            dwSAL_releaseSensor(&camera_);
-            camera_ = DW_NULL_HANDLE;
-            ROS_INFO("Sensor released.");
+            dwStatus release_status = dwSAL_releaseSensor(&camera_); // releaseSensor takes pointer-to-pointer
+             if (release_status != DW_SUCCESS) {
+                ROS_ERROR("Error releasing sensor: %s", dwGetStatusName(release_status));
+            }
+            camera_ = DW_NULL_HANDLE; // Ensure handle is null after release attempt
+            ROS_INFO("Sensor release process completed.");
         }
 
         // Destroy the resized RGBA image handle
@@ -221,7 +234,7 @@ public:
             sdk_ = DW_NULL_HANDLE;
              ROS_INFO("SDK context released.");
         }
-        ROS_INFO("Resources released.");
+        ROS_INFO("Resource release process completed.");
     }
 
     void publish()
@@ -254,58 +267,56 @@ public:
                 header.frame_id = "camera_frame"; // Assign a frame_id
 
                 // 1. Read frame from the camera (expecting RGBA format)
-                // ROS_DEBUG("Reading frame %d...", count); // Use ROS_DEBUG
                 dwStatus read_status = dwSensorCamera_readFrame(&frame_handle, 0, timeout, camera_);
                 if (read_status == DW_TIME_OUT) {
-                     ROS_WARN_THROTTLE(1.0, "Timeout reading camera frame %d.", count); // Warn occasionally on timeout
+                     ROS_WARN_THROTTLE(1.0, "Timeout reading camera frame %d.", count);
+                     if(frame_handle) { // Return frame even on timeout if acquired somehow? Check DW docs. Usually NULL on timeout.
+                         dwSensorCamera_returnFrame(&frame_handle);
+                         frame_handle = DW_NULL_HANDLE;
+                     }
                      continue; // Skip this iteration
+                } else if (read_status == DW_NOT_READY) {
+                     ROS_WARN_THROTTLE(1.0, "Camera reported DW_NOT_READY reading frame %d. Waiting...", count);
+                     ros::Duration(0.05).sleep(); // Short sleep if not ready
+                     if(frame_handle) { dwSensorCamera_returnFrame(&frame_handle); frame_handle = DW_NULL_HANDLE;}
+                     continue;
                 }
-                CHECK_DW_ERROR(read_status); // Check for other errors
-                // ROS_DEBUG("Frame %d read.", count);
+                // Check for other errors after handling timeout/not_ready
+                CHECK_DW_ERROR(read_status);
+                 if (!frame_handle) { // Should not happen if status is DW_SUCCESS, but good check
+                    ROS_ERROR("[%d] Read frame returned DW_SUCCESS but frame handle is NULL!", count);
+                    continue;
+                }
 
                 // 2. Get NvMedia handle for the NATIVE RGBA image buffer
                 CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_rgba_native_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame_handle));
+                 if (!nvmedia_rgba_native_ptr || !nvmedia_rgba_native_ptr->img) {
+                     ROS_ERROR("[%d] getImageNvMedia returned success but pointer or image is NULL!", count);
+                     CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame_handle)); // Return frame before continuing
+                     continue;
+                 }
 
                 // 3. Create a temporary DW image handle *bound* to the camera's native RGBA NvMedia image
                 CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_rgba_native, nvmedia_rgba_native_ptr->img));
 
-                 // === Optional Debug: Check native frame properties every N frames ===
-                 /*
-                 if (count % 100 == 0) { // Check every 100 frames
-                     dwImageProperties native_props;
-                     dwStatus prop_status = dwImage_getProperties(&native_props, frame_rgba_native);
-                     if (prop_status == DW_SUCCESS) {
-                         if(native_props.format != DW_IMAGE_FORMAT_RGBA_UINT8) {
-                             ROS_WARN_THROTTLE(10.0,"[%d] Native frame format is NOT RGBA! Actual: %d", count, native_props.format);
-                         }
-                         if(native_props.width != camera_properties_.resolution.x || native_props.height != camera_properties_.resolution.y) {
-                              ROS_WARN_THROTTLE(10.0,"[%d] Native frame size %ux%u differs from sensor properties %ux%u", count,
-                                                native_props.width, native_props.height,
-                                                camera_properties_.resolution.x, camera_properties_.resolution.y);
-                         }
-                     }
-                 }
-                 */
-                 // =====================================================================
-
 
                 // 4. ***** Perform GPU-accelerated Resizing ONLY *****
-                //    Input: frame_rgba_native (original resolution, RGBA)
-                //    Output: frame_rgba_resized_ (TARGET_WIDTHxTARGET_HEIGHT, RGBA)
-                // ROS_DEBUG("Resizing frame %d...", count);
-                CHECK_DW_ERROR(dwImage_copyConvert(frame_rgba_resized_, frame_rgba_native, sdk_)); // Should only resize now
-                // ROS_DEBUG("Frame %d resized.", count);
+                CHECK_DW_ERROR(dwImage_copyConvert(frame_rgba_resized_, frame_rgba_native, sdk_));
 
                 // 5. Get NvMedia handle for the *final, resized* RGBA image
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgba_resized_ptr, frame_rgba_resized_));
+                 if (!nvmedia_rgba_resized_ptr || !nvmedia_rgba_resized_ptr->img) {
+                     ROS_ERROR("[%d] getNvMedia (resized) returned success but pointer or image is NULL!", count);
+                     CHECK_DW_ERROR(dwImage_destroy(&frame_rgba_native)); // Clean up bound handle
+                     CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame_handle)); // Return frame
+                     continue;
+                 }
 
                 // 6. Access the final NvMedia RGBA image data to copy to ROS message
                 NvMediaImageSurfaceMap surfaceMap;
-                // ROS_DEBUG("Locking resized surface for frame %d...", count);
                 if (NvMediaImageLock(nvmedia_rgba_resized_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
                 {
-                    // ROS_DEBUG("Surface locked for frame %d.", count);
-                    // 7. Populate the ROS message directly from the mapped NvMedia buffer
+                    // 7. Populate the ROS message
                     ros_img_ptr->header = header;
                     ros_img_ptr->height = TARGET_HEIGHT;
                     ros_img_ptr->width = TARGET_WIDTH;
@@ -313,14 +324,16 @@ public:
                     ros_img_ptr->is_bigendian = false;
                     ros_img_ptr->step = static_cast<uint32_t>(TARGET_WIDTH * 4);
 
-                    // Allocate memory in the ROS message (CPU memory)
                     size_t img_size = static_cast<size_t>(ros_img_ptr->step) * TARGET_HEIGHT;
                     ros_img_ptr->data.resize(img_size);
 
-                    // 8. ***** Copy data from GPU (mapped NvMedia) to CPU (ROS message) *****
-                    // ROS_DEBUG("Copying data to ROS message for frame %d...", count);
+                    // 8. Copy data from GPU (mapped NvMedia) to CPU (ROS message)
                     size_t expected_pitch = static_cast<size_t>(TARGET_WIDTH) * 4;
-                    if (surfaceMap.surface[0].pitch == expected_pitch) {
+                    if (surfaceMap.surface[0].mapping == nullptr) {
+                        ROS_ERROR("[%d] NvMediaImageLock succeeded but surface mapping is NULL!", count);
+                        // Unlock before continuing/throwing
+                        NvMediaImageUnlock(nvmedia_rgba_resized_ptr->img);
+                    } else if (surfaceMap.surface[0].pitch == expected_pitch) {
                          memcpy(ros_img_ptr->data.data(), surfaceMap.surface[0].mapping, img_size);
                     } else {
                         ROS_WARN_ONCE("NvMedia surface pitch (%zu) differs from expected (%zu). Copying row by row.",
@@ -333,15 +346,16 @@ public:
                                    expected_pitch);
                         }
                     }
-                    // ROS_DEBUG("Data copy complete for frame %d.", count);
 
-                    // 9. Publish the ROS image message
-                    gmsl_pub_img_.publish(ros_img_ptr);
-                    // ROS_DEBUG("Frame %d published.", count);
+                    // 9. Publish the ROS image message (only if data was valid)
+                     if(surfaceMap.surface[0].mapping != nullptr) {
+                        gmsl_pub_img_.publish(ros_img_ptr);
+                     }
 
-                    // 10. Unlock the NvMedia image surface
+                    // 10. Unlock the NvMedia image surface (if locked)
+                    // Check if mapping was NULL before trying to unlock might be needed depending on NvMedia behavior
                     NvMediaImageUnlock(nvmedia_rgba_resized_ptr->img);
-                    // ROS_DEBUG("Surface unlocked for frame %d.", count);
+
                 } else {
                      ROS_WARN("Failed to lock NvMedia image for reading for frame %d.", count);
                 }
@@ -362,20 +376,18 @@ public:
                 ++count;
             }
         }
-        catch (const std::runtime_error &e) // Catch specific DW runtime errors
+        catch (const std::runtime_error &e)
         {
-            // Log the specific error from CHECK_DW_ERROR macro
             ROS_ERROR("Runtime error in publish loop: %s", e.what());
         }
-        catch (const std::exception &e) // Catch other standard exceptions
+        catch (const std::exception &e)
         {
              ROS_ERROR("Standard exception caught in publish loop: %s", e.what());
         }
-        catch (...) // Catch any other unknown exceptions
+        catch (...)
         {
             ROS_ERROR("Unknown exception caught in publish loop.");
         }
-        // Destructor will handle resource cleanup when loop exits or exception occurs
          ROS_INFO("Publish loop finished.");
     }
 };
@@ -383,7 +395,7 @@ public:
 //------------------------------------------------------------------------------
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "camera_gmsl_gpu_resize_rgba"); // Updated node name
+    ros::init(argc, argv, "camera_gmsl_gpu_resize_rgba");
 
     po::options_description desc{"Options"};
     desc.add_options()
@@ -416,16 +428,18 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    std::unique_ptr<CameraGMSL> cam_ptr; // Use unique_ptr for safer resource management
+    // Use unique_ptr for safer resource management (C++11 style)
+    std::unique_ptr<CameraGMSL> cam_ptr;
 
     try {
         ROS_INFO("Creating CameraGMSL object (RGBA input, GPU resize)...");
-        cam_ptr = std::make_unique<CameraGMSL>(args); // Create object
+        // **** MODIFICATION: Use C++11 style unique_ptr creation ****
+        cam_ptr.reset(new CameraGMSL(args));
         ROS_INFO("CameraGMSL object created. Starting publishing...");
         cam_ptr->publish(); // Call publish method
 
     } catch (const std::runtime_error &e) {
-        ROS_FATAL("Initialization or runtime error: %s", e.what()); // Use ROS_FATAL for critical errors
+        ROS_FATAL("Initialization or runtime error: %s", e.what());
         // cam_ptr will be automatically destroyed here if partially initialized
         return 1;
     } catch (const std::exception& e) {
@@ -436,7 +450,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // Destructor of CameraGMSL (via unique_ptr) will be called here upon normal exit
     ROS_INFO("Camera GMSL node (RGBA input, GPU resize) shutting down normally.");
     return 0;
 }
