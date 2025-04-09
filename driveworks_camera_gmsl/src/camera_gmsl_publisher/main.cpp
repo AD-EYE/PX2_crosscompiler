@@ -134,7 +134,7 @@ public:
 
                 // Check for timeout correctly
                 dwTime_t current_time = 0;
-                CHECK_DW_ERROR(dwContext_getCurrentTime(¤t_time, sdk_));
+                CHECK_DW_ERROR(dwContext_getCurrentTime(&current_time, sdk_));
                 if (current_time - start_time > MAX_WAIT_US) {
                     // Construct the error message before throwing
                     std::string error_msg = "Timeout waiting for camera to start. Last status: " + std::string(dwGetStatusName(status));
