@@ -171,47 +171,11 @@ public:
         ROS_INFO("Camera type - %s \n", cam_type.c_str());
         ROS_INFO("Starting to publish images");
 
-        // Get resolution ratio - first check if it's on the ROS parameter server
-        float resolution_ratio = 1.0f;
+        // Sabit 512x512 çözünürlük
+        const int TARGET_WIDTH = 512;
+        const int TARGET_HEIGHT = 512;
         
-        // Check for parameters with debug logs
-        ROS_INFO("Checking for resolution_ratio parameter...");
-        
-        // Try various namespaces for the parameter
-        ros::NodeHandle pnh_("~");
-        if (pnh_.hasParam("resolution_ratio")) {
-            pnh_.getParam("resolution_ratio", resolution_ratio);
-            ROS_INFO("Found private parameter resolution_ratio: %f", resolution_ratio);
-        } 
-        else if (nh_.hasParam("resolution_ratio")) {
-            nh_.getParam("resolution_ratio", resolution_ratio);
-            ROS_INFO("Found global parameter resolution_ratio: %f", resolution_ratio);
-        }
-        else if (nh_.hasParam("/resolution_ratio")) {
-            nh_.getParam("/resolution_ratio", resolution_ratio);
-            ROS_INFO("Found root parameter resolution_ratio: %f", resolution_ratio);
-        }
-        // Otherwise use command line argument if available
-        else if (args_.count("resolution-ratio")) {
-            resolution_ratio = args_["resolution-ratio"].as<float>();
-            ROS_INFO("Using command line argument resolution-ratio: %f", resolution_ratio);
-        }
-        else {
-            ROS_INFO("No resolution_ratio parameter found. Using default: 1.0");
-        }
-        
-        // Validate the ratio
-        if (resolution_ratio <= 0.0f || resolution_ratio > 1.0f) {
-            ROS_WARN("Invalid resolution ratio %f. Must be between 0 and 1. Using default ratio of 1.0", resolution_ratio);
-            resolution_ratio = 1.0f;
-        }
-        
-        // Calculate target resolution based on original dimensions and ratio
-        const int TARGET_WIDTH = static_cast<int>(camera_properties_.resolution.x * resolution_ratio);
-        const int TARGET_HEIGHT = static_cast<int>(camera_properties_.resolution.y * resolution_ratio);
-        
-        ROS_INFO("Using resolution ratio %f, target resolution: %dx%d", 
-                resolution_ratio, TARGET_WIDTH, TARGET_HEIGHT);
+        ROS_INFO("Using fixed resolution: %dx%d", TARGET_WIDTH, TARGET_HEIGHT);
 
         // Performans için: OpenCV görüntüleri önceden oluşturun (ön bellek ayırma)
         cv::Mat original_image, resized_image;
@@ -268,12 +232,10 @@ public:
                     // NvMedia tamponundan OpenCV Mat oluştur (RGBA formatı) - bellek kopyalamadan, referans olarak
                     original_image = cv::Mat(original_height, original_width, CV_8UC4, surfaceMap.surface[0].mapping);
                     
-                    // Hedef çözünürlükte bir Mat oluştur ve yeniden boyutlandır
-                    // Performans optimize edildi: INTER_NEAREST daha hızlıdır, kalite çok önemli değilse
-                    cv::resize(original_image, resized_image, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, 
-                              (resolution_ratio <= 0.5) ? cv::INTER_AREA : cv::INTER_LINEAR);
+                    // Hedef çözünürlükte yeniden boyutlandır (sabit 512x512)
+                    cv::resize(original_image, resized_image, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, cv::INTER_AREA);
                     
-                    // Görüntü verilerini kopyala (sürekli bellek düzenindeyse doğrudan kopyalayabiliriz)
+                    // Görüntü verilerini kopyala
                     if(resized_image.isContinuous()) {
                         memcpy(&ros_img_ptr->data[0], resized_image.data, img_size);
                     } else {
@@ -329,8 +291,7 @@ int main(int argc, char **argv)
             "Optional parameter used only for Tegra B, enables slave mode.\n")
         ("custom-board", po::value<std::string>()-> default_value("0"), "If true, then the configuration for board and camera "
                               "will be input from the config-file\n")
-        ("custom-config", po::value<std::string>()-> default_value(""), "Set of custom board extra configuration\n")
-        ("resolution-ratio", po::value<float>()-> default_value(1.0f), "Resolution scale factor (0.0-1.0). If outside this range, 1.0 will be used.\n");
+        ("custom-config", po::value<std::string>()-> default_value(""), "Set of custom board extra configuration\n");
 
     po::variables_map args;
     
