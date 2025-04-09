@@ -29,12 +29,8 @@
 // Renderer
 #include <dw/renderer/Renderer.h>
 
-// CUDA ve GPU ile ilgili başlıklar
-#include <cuda_runtime.h>
+// Normal OpenCV
 #include <opencv2/opencv.hpp>
-#include <opencv2/core/cuda.hpp>
-#include <opencv2/cudawarping.hpp>
-#include <opencv2/cudaimgproc.hpp>
 
 #include <sstream>
 #include <boost/program_options.hpp>
@@ -46,15 +42,6 @@
                         throw std::runtime_error(std::string("DW Error ") \
                                                 + dwGetStatusName(result) \
                                                 + std::string(" executing DW function:\n " #x) \
-                                                + std::string("\n at " __FILE__ ":") + std::to_string(__LINE__)); \
-                    }};
-
-#define CHECK_CUDA_ERROR(x) { \
-                    cudaError_t result = x; \
-                    if(result != cudaSuccess) { \
-                        throw std::runtime_error(std::string("CUDA Error ") \
-                                                + cudaGetErrorString(result) \
-                                                + std::string(" executing CUDA function:\n " #x) \
                                                 + std::string("\n at " __FILE__ ":") + std::to_string(__LINE__)); \
                     }};
 
@@ -226,14 +213,20 @@ public:
         ROS_INFO("Using resolution ratio %f, target resolution: %dx%d", 
                 resolution_ratio, TARGET_WIDTH, TARGET_HEIGHT);
 
-        // CUDA belleğini önceden tahsis et - bu gerçekten daha performanslı olacak
-        cudaStream_t stream;
-        CHECK_CUDA_ERROR(cudaStreamCreate(&stream));
+        // Performans için: OpenCV görüntüleri önceden oluşturun (ön bellek ayırma)
+        cv::Mat original_image, resized_image;
         
-        // GPU belleği - sonuçları geçici depolamak için
-        void* d_outputBuffer = nullptr;
-        size_t outputSize = TARGET_WIDTH * TARGET_HEIGHT * 4; // RGBA - 4 kanal
-        CHECK_CUDA_ERROR(cudaMalloc(&d_outputBuffer, outputSize));
+        // ROS mesajı boyutunu önceden oluştur ve ayır
+        size_t img_size = TARGET_WIDTH * TARGET_HEIGHT * 4;  // RGBA = 4 kanal
+        
+        // Mesajı önceden yapılandır ve belleği önceden ayır
+        sensor_msgs::ImagePtr ros_img_ptr = boost::make_shared<sensor_msgs::Image>();
+        ros_img_ptr->encoding = sensor_msgs::image_encodings::RGBA8;
+        ros_img_ptr->is_bigendian = false;
+        ros_img_ptr->width = TARGET_WIDTH;
+        ros_img_ptr->height = TARGET_HEIGHT;
+        ros_img_ptr->step = TARGET_WIDTH * 4;
+        ros_img_ptr->data.resize(img_size);
 
         try
         {
@@ -248,10 +241,11 @@ public:
                 dwImageNvMedia* nvmedia_yuv_img_ptr;
                 dwImageNvMedia* nvmedia_rgb_img_ptr;
 
-                sensor_msgs::ImagePtr ros_img_ptr = boost::make_shared<sensor_msgs::Image>(); // Her yineleme için yeni bir mesaj oluştur
+                // Başlık bilgilerini güncelle
                 std_msgs::Header header;
                 header.seq = count;
                 header.stamp = ros::Time::now(); 
+                ros_img_ptr->header = header;
                 
                 // Kameradan oku
                 CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, camera_sibling_id, timeout, camera_));
@@ -271,40 +265,25 @@ public:
                     int original_height = nvmedia_rgb_img_ptr->prop.height;
                     int original_width = nvmedia_rgb_img_ptr->prop.width;
                     
-                    // GPU işlemleri için CUDA belleğine kopyala - kaynak zaten GPU üzerinde, ancak OpenCV-CUDA için uygun formata çevirmemiz gerekiyor
-                    cv::cuda::GpuMat gpu_image(original_height, original_width, CV_8UC4, surfaceMap.surface[0].mapping);
+                    // NvMedia tamponundan OpenCV Mat oluştur (RGBA formatı) - bellek kopyalamadan, referans olarak
+                    original_image = cv::Mat(original_height, original_width, CV_8UC4, surfaceMap.surface[0].mapping);
                     
-                    // GPU üzerinde yeniden boyutlandırma
-                    cv::cuda::GpuMat gpu_resized;
-                    cv::cuda::resize(gpu_image, gpu_resized, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, cv::INTER_LINEAR, stream);
+                    // Hedef çözünürlükte bir Mat oluştur ve yeniden boyutlandır
+                    // Performans optimize edildi: INTER_NEAREST daha hızlıdır, kalite çok önemli değilse
+                    cv::resize(original_image, resized_image, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, 
+                              (resolution_ratio <= 0.5) ? cv::INTER_AREA : cv::INTER_LINEAR);
                     
-                    // OpenCV GpuMat'i doğrudan GPU belleğinden okuyup ROS mesajına hazırla
-                    // NOT: Bu aşamada veriler hala GPU üzerinde
-                    size_t img_size = TARGET_WIDTH * TARGET_HEIGHT * 4; // 4 kanal (RGBA)
-                    
-                    // ROS mesajını hazırla
-                    ros_img_ptr->header = header;
-                    ros_img_ptr->height = TARGET_HEIGHT;
-                    ros_img_ptr->width = TARGET_WIDTH;
-                    ros_img_ptr->encoding = sensor_msgs::image_encodings::RGBA8;
-                    ros_img_ptr->is_bigendian = false;
-                    ros_img_ptr->step = TARGET_WIDTH * 4;
-                    ros_img_ptr->data.resize(img_size);
-                    
-                    // GPU'dan doğrudan CPU belleğine (ROS mesajı veri bufferı) kopyala
-                    // Bu, GPU'dan CPU'ya tek bir memcpy işlemi olacak
-                    CHECK_CUDA_ERROR(cudaMemcpy2D(
-                        &ros_img_ptr->data[0],              // Hedef (ROS mesajı)
-                        TARGET_WIDTH * 4,                   // Hedef pitch (satır genişliği)
-                        gpu_resized.ptr<unsigned char>(),   // Kaynak (GPU belleği)
-                        gpu_resized.step,                   // Kaynak pitch
-                        TARGET_WIDTH * 4,                   // Genişlik (byte cinsinden)
-                        TARGET_HEIGHT,                      // Satır sayısı
-                        cudaMemcpyDeviceToHost              // Yön (GPU'dan CPU'ya)
-                    ));
-                    
-                    // CUDA işlemlerinin tamamlanmasını bekle
-                    cudaStreamSynchronize(stream);
+                    // Görüntü verilerini kopyala (sürekli bellek düzenindeyse doğrudan kopyalayabiliriz)
+                    if(resized_image.isContinuous()) {
+                        memcpy(&ros_img_ptr->data[0], resized_image.data, img_size);
+                    } else {
+                        // Sürekli değilse satır satır kopyala
+                        for(int i = 0; i < TARGET_HEIGHT; i++) {
+                            memcpy(&ros_img_ptr->data[i * ros_img_ptr->step], 
+                                  resized_image.ptr<uchar>(i), 
+                                  TARGET_WIDTH * 4);
+                        }
+                    }
                     
                     // Yeniden boyutlandırılmış görüntüyü yayınla
                     gmsl_pub_img_.publish(ros_img_ptr);
@@ -326,12 +305,6 @@ public:
         {
             std::cerr << e.what() << "\n";
         }
-        
-        // CUDA kaynaklarını temizle
-        if (d_outputBuffer) {
-            cudaFree(d_outputBuffer);
-        }
-        cudaStreamDestroy(stream);
     }
 };
 
