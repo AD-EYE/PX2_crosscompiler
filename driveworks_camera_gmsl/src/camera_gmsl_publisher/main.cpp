@@ -18,13 +18,11 @@
 
 // Image
 #include <dw/image/ImageStreamer.h>
-#include <dw/image/FormatConverter.h> // Use FormatConverter instead of vibrante specific one if available/needed
+#include <dw/image/FormatConverter.h> // Use FormatConverter
 
 // nvmedia for surface map
-#include <nvmedia_2d.h> // Include NvMedia 2D header
+#include <nvmedia_2d.h> // NvMedia 2D header
 #include <nvmedia_image.h>
-// #include "nvmedia_ijpe.h" // IJPE likely not needed for this
-// #include "nvmedia_surface.h" // NvMediaImageSurfaceMap is in nvmedia_image.h or nvmedia_2d.h
 
 // Renderer (Keep if needed elsewhere, not strictly required for this modification)
 // #include <dw/renderer/Renderer.h>
@@ -46,7 +44,7 @@
                     }};
 
 // --- Define Target Resolution ---
-// You can make these command-line arguments or constants
+// Hedef çözünürlüğü buradan ayarlayabilir veya komut satırı argümanı yapabilirsiniz
 const int TARGET_WIDTH = 640;
 const int TARGET_HEIGHT = 480;
 // -----------------------------
@@ -65,16 +63,16 @@ private:
     sensor_msgs::ImagePtr ros_img_ptr_;
 
     // Image handles and properties
-    dwImageHandle_t frame_rgba_fullres_ = DW_NULL_HANDLE; // Renamed for clarity
+    dwImageHandle_t frame_rgba_fullres_ = DW_NULL_HANDLE; // Netlik için yeniden adlandırıldı
     dwSensorHandle_t camera_ = DW_NULL_HANDLE;
-    dwImageProperties camera_image_properties_; // Original properties
+    dwImageProperties camera_image_properties_; // Orijinal özellikler
     dwCameraProperties camera_properties_;
 
-    // OpenCV GPU Mats (allocated once)
+    // OpenCV GPU Mats (bir kez ayrılır)
     cv::gpu::GpuMat gpu_rgba_fullres_;
     cv::gpu::GpuMat gpu_rgba_resized_;
-    cv::Mat cpu_rgba_resized_;         // For downloading result to CPU
-    cv::Mat cpu_rgba_fullres_header_;  // Header only, to map NvMedia buffer
+    cv::Mat cpu_rgba_resized_;         // Sonucu CPU'ya indirmek için
+    cv::Mat cpu_rgba_fullres_header_;  // Yalnızca başlık, NvMedia tamponunu eşlemek için
 
     po::variables_map args_;
 
@@ -86,8 +84,6 @@ public:
         // -----------------------------------------
         {
             dwContextParameters sdk_params = {};
-            // Consider enabling CUDA context for potential interop if needed later
-            // sdk_params.cudaDeviceIndex = 0; // Or appropriate device
             CHECK_DW_ERROR(dwInitialize(&sdk_, DW_VERSION, &sdk_params));
             CHECK_DW_ERROR(dwSAL_initialize(&sal_, sdk_));
         }
@@ -97,7 +93,7 @@ public:
         //------------------------------------------------------------------------------
         {
             dwSensorParams params;
-            std::string parameter_string = std::string("output-format=yuv,fifo-size=3"); // Keep YUV output from camera
+            std::string parameter_string = std::string("output-format=yuv,fifo-size=3"); // Kameradan YUV çıktısını koru
 
             parameter_string             += std::string(",camera-type=") + args_["camera-type"].as<std::string>().c_str();
             parameter_string             += std::string(",csi-port=") + args_["camera-port"].as<std::string>().c_str();
@@ -106,7 +102,7 @@ public:
             if (args_["custom-board"].as<std::string>().compare("1") == 0)
             {
                 parameter_string             += ",custom-board=1";
-                params.auxiliarydata           = args_["custom-config"].as<std::string>().c_str(); // Use correct key
+                params.auxiliarydata           = args_["custom-config"].as<std::string>().c_str(); // Doğru anahtarı kullan
             }
 
             params.parameters           = parameter_string.c_str();
@@ -115,79 +111,76 @@ public:
             CHECK_DW_ERROR(dwSAL_createSensor(&camera_, params, sal_));
             CHECK_DW_ERROR(dwSensor_start(camera_));
 
-            // Wait for first frame
-            dwCameraFrameHandle_t frame;
+            // İlk kareyi bekle
+            dwCameraFrameHandle_t frame_handle; // dwImageHandle_t'den farklı bir isim kullanın
             dwStatus status = DW_NOT_READY;
-            int tries = 5; // Limit tries
+            int tries = 5; // Deneme sayısını sınırla
              while (status == DW_NOT_READY && tries-- > 0) {
-                 status = dwSensorCamera_readFrame(&frame, 0, 100000, camera_); // Increased timeout slightly
+                 status = dwSensorCamera_readFrame(&frame_handle, 0, 100000, camera_); // Zaman aşımını biraz artır
                  if (status == DW_SUCCESS) {
-                     CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
+                     CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame_handle));
                  } else if (status != DW_NOT_READY) {
-                     // Other error
+                     // Diğer hata
                      break;
                  } else {
-                      ros::Duration(0.1).sleep(); // Short sleep if not ready
+                      ros::Duration(0.1).sleep(); // Hazır değilse kısa uyku
                  }
             }
 
             if (status != DW_SUCCESS) {
-                 throw std::runtime_error("Camera did not start correctly or timed out. Last status: " + std::string(dwGetStatusName(status)));
+                 throw std::runtime_error("Kamera doğru şekilde başlamadı veya zaman aşımına uğradı. Son durum: " + std::string(dwGetStatusName(status)));
             }
 
             CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera_properties_, camera_));
-            ROS_INFO("Successfully initialized camera with resolution %dx%d at framerate %f FPS",
+            ROS_INFO("Kamera başarıyla başlatıldı: çözünürlük %dx%d, kare hızı %f FPS",
                 camera_properties_.resolution.x, camera_properties_.resolution.y, camera_properties_.framerate);
 
-            // Store original properties (although camera_properties_ holds them)
+            // Orijinal özellikleri sakla (camera_properties_ zaten tutuyor olsa da)
             CHECK_DW_ERROR(dwSensorCamera_getImageProperties(&camera_image_properties_, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, camera_));
-             ROS_INFO("Camera NATIVE_PROCESSED properties: type %d, format %d",
-                 camera_image_properties_.type, camera_image_properties_.format); // Should be NVMEDIA, YUV*
+             ROS_INFO("Kamera NATIVE_PROCESSED özellikleri: type %d, format %d",
+                 camera_image_properties_.type, camera_image_properties_.format); // NVMEDIA, YUV* olmalı
 
         }
 
          // ROS initialization
         {
-            ros::VP_string ros_str; // Needed for older ROS versions potentially
-            // ros::init(ros_str, "camera_gmsl"); // Use this if argc/argv aren't easily available
-            // Temporarily remove argc, argv from init if causing issues, but standard is:
-            // int ros_argc = 0; char** ros_argv = nullptr; // If you don't have main's args easily
-            // ros::init(ros_argc, ros_argv, "camera_gmsl", ros::init_options::NoSigintHandler); // Or handle signals properly
-             ros::init(ros_str, "camera_gmsl", ros::init_options::NoSigintHandler); // Simpler init
+            ros::VP_string ros_str; // Potansiyel olarak eski ROS sürümleri için gerekli
+             ros::init(ros_str, "camera_gmsl", ros::init_options::NoSigintHandler); // Daha basit init
 
             ros::NodeHandle n;
-            // Publish resized image
+            // Yeniden boyutlandırılmış görüntüyü yayınla
             gmsl_pub_img_ = n.advertise<sensor_msgs::Image>("camera_1/image_resized", 1);
 
             ros_img_ptr_ = boost::make_shared<sensor_msgs::Image>();
-            ROS_INFO("Successfully initialized ROS");
+            ROS_INFO("ROS başarıyla başlatıldı");
         }
 
         // Nvmedia and OpenCV GPU initialization
         {
-            // Create DW Image for FULL Resolution RGBA (on GPU)
+            // TAM Çözünürlükteki RGBA için DW Görüntüsü oluştur (GPU üzerinde)
             dwImageProperties rgba_img_prop = {};
             rgba_img_prop.width = camera_properties_.resolution.x;
             rgba_img_prop.height = camera_properties_.resolution.y;
-            rgba_img_prop.type = DW_IMAGE_NVMEDIA;          // Target NvMedia for GPU buffer
-            rgba_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8; // Target RGBA
-            rgba_img_prop.memoryLayout = DW_IMAGE_MEMORY_LAYOUT_PITCH; // Default layout
+            rgba_img_prop.type = DW_IMAGE_NVMEDIA;          // Hedef NvMedia (GPU tamponu için)
+            rgba_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8; // Hedef RGBA
+            // rgba_img_prop.memoryLayout = DW_IMAGE_MEMORY_LAYOUT_PITCH; // BU SATIRI KALDIR - DW 1.2'de mevcut değil
+
             CHECK_DW_ERROR(dwImage_create(&frame_rgba_fullres_, rgba_img_prop, sdk_));
-            ROS_INFO("Successfully initialized full-res RGBA NvMedia dwImage (%dx%d)",
+            ROS_INFO("Tam çözünürlüklü RGBA NvMedia dwImage başarıyla başlatıldı (%dx%d)",
                      rgba_img_prop.width, rgba_img_prop.height);
 
-            // Pre-allocate OpenCV GPU Mats
-            // Note: In OpenCV 2.4, you often needed to create them with size
+            // OpenCV GPU Mat'larını önceden ayır
+            // Not: OpenCV 2.4'te genellikle bunları doğru boyutta create() ile oluşturmak gerekir
             gpu_rgba_fullres_.create(camera_properties_.resolution.y, camera_properties_.resolution.x, CV_8UC4);
             gpu_rgba_resized_.create(TARGET_HEIGHT, TARGET_WIDTH, CV_8UC4);
 
-             // Check if GPU device is available (optional sanity check)
+             // GPU aygıtının kullanılabilir olup olmadığını kontrol et (isteğe bağlı sağlık kontrolü)
              if (cv::gpu::getCudaEnabledDeviceCount() == 0) {
-                 throw std::runtime_error("No CUDA-enabled GPU device found for OpenCV.");
+                 throw std::runtime_error("OpenCV için CUDA özellikli GPU aygıtı bulunamadı.");
              }
-             // cv::gpu::setDevice(0); // Explicitly set device if needed
+             // cv::gpu::setDevice(0); // Gerekirse aygıtı açıkça ayarla
 
-             ROS_INFO("Successfully initialized OpenCV GPU Mats for resizing (%dx%d -> %dx%d)",
+             ROS_INFO("Yeniden boyutlandırma için OpenCV GPU Mat'ları başarıyla başlatıldı (%dx%d -> %dx%d)",
                       camera_properties_.resolution.x, camera_properties_.resolution.y,
                       TARGET_WIDTH, TARGET_HEIGHT);
         }
@@ -195,153 +188,152 @@ public:
 
     ~CameraGMSL()
     {
-        ROS_INFO("Destructor: Cleaning up resources...");
-        // Ensure ROS is properly shutdown if initialized here
+        ROS_INFO("Destructor: Kaynaklar temizleniyor...");
+        // ROS burada başlatıldıysa düzgün kapatıldığından emin ol
         if (ros::isInitialized()) {
              ros::shutdown();
         }
 
-        if (camera_) {
+        if (camera_ != DW_NULL_HANDLE) { // Yok etmeden önce handle kontrolü
             dwSensor_stop(camera_);
             dwSAL_releaseSensor(&camera_);
-            camera_ = DW_NULL_HANDLE; // Prevent double release
+            camera_ = DW_NULL_HANDLE; // Çift serbest bırakmayı önle
         }
 
-        // Destroy created image
-        // Check handle before destroying
-        if (frame_rgba_fullres_ != DW_NULL_HANDLE) {
+        // Oluşturulan görüntüyü yok et
+        if (frame_rgba_fullres_ != DW_NULL_HANDLE) { // Yok etmeden önce handle kontrolü
             dwImage_destroy(&frame_rgba_fullres_);
             frame_rgba_fullres_ = DW_NULL_HANDLE;
         }
 
+        // Release OpenCV GPU Mats (otomatik olarak destructors tarafından halledilir)
 
-        // Release OpenCV GPU Mats (automatically handled by destructors)
-
-        if (sal_ != DW_NULL_HANDLE) {
+        if (sal_ != DW_NULL_HANDLE) { // Serbest bırakmadan önce handle kontrolü
             dwSAL_release(&sal_);
             sal_ = DW_NULL_HANDLE;
         }
-        if (sdk_ != DW_NULL_HANDLE) {
+        if (sdk_ != DW_NULL_HANDLE) { // Serbest bırakmadan önce handle kontrolü
             dwRelease(&sdk_);
             sdk_ = DW_NULL_HANDLE;
         }
 
-        // dwLogger_release(); // Only if explicitly initialized
-        ROS_INFO("Cleanup complete.");
+        // dwLogger_release(); // Yalnızca açıkça başlatıldıysa
+        ROS_INFO("Temizlik tamamlandı.");
     }
 
     void publish()
     {
         std::string cam_type = args_["camera-type"].as<std::string>();
-        ROS_INFO("Camera type: %s", cam_type.c_str());
-        ROS_INFO("Target resolution for publishing: %dx%d", TARGET_WIDTH, TARGET_HEIGHT);
-        ROS_INFO("Starting to publish images...");
+        ROS_INFO("Kamera tipi: %s", cam_type.c_str());
+        ROS_INFO("Yayınlama için hedef çözünürlük: %dx%d", TARGET_WIDTH, TARGET_HEIGHT);
+        ROS_INFO("Görüntüler yayınlanmaya başlıyor...");
 
-        ros::Rate loop_rate(camera_properties_.framerate > 0 ? camera_properties_.framerate : 15); // Use camera framerate if available
+        ros::Rate loop_rate(camera_properties_.framerate > 0 ? camera_properties_.framerate : 15); // Varsa kamera kare hızını kullan
         uint32_t count = 0;
 
-        dwImageHandle_t frame_yuv = DW_NULL_HANDLE; // Handle for YUV frame wrapper
+        dwImageHandle_t frame_yuv = DW_NULL_HANDLE; // YUV çerçeve sarmalayıcısı için handle
 
         try
         {
             while (ros::ok())
             {
-                dwTime_t timeout = 1000000 / (camera_properties_.framerate > 0 ? camera_properties_.framerate : 15) + 10000; // Timeout based on framerate
-                dwCameraFrameHandle_t frame_handle; // Use a different name from the dwImageHandle_t
+                dwTime_t timeout = 1000000 / (camera_properties_.framerate > 0 ? camera_properties_.framerate : 15) + 10000; // Kare hızına göre zaman aşımı
+                dwCameraFrameHandle_t frame_handle; // dwImageHandle_t'den farklı bir isim kullanın
                 dwImageNvMedia* nvmedia_yuv_img_ptr = nullptr;
                 dwImageNvMedia* nvmedia_rgba_fullres_img_ptr = nullptr;
 
-                // 1. Read frame from camera (YUV NvMedia buffer)
+                // 1. Kameradan kare oku (YUV NvMedia tamponu)
                 dwStatus read_status = dwSensorCamera_readFrame(&frame_handle, 0, timeout, camera_);
                 if (read_status == DW_TIME_OUT) {
-                    ROS_WARN_THROTTLE(1.0, "Timeout reading camera frame");
-                    continue; // Skip this iteration
+                    ROS_WARN_THROTTLE(1.0, "Kamera karesi okunurken zaman aşımı");
+                    continue; // Bu iterasyonu atla
                 }
-                CHECK_DW_ERROR(read_status); // Handle other errors
+                CHECK_DW_ERROR(read_status); // Diğer hataları işle
 
-                // 2. Get NvMedia handle for the raw YUV data
-                // Use DW_CAMERA_OUTPUT_NATIVE_PROCESSED as it's often the required input for converters
+                // 2. Ham YUV verisi için NvMedia handle al
+                // DW_CAMERA_OUTPUT_NATIVE_PROCESSED kullanın, çünkü genellikle dönüştürücüler için gerekli girdidir
                 CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame_handle));
 
-                 // Need to wrap the NvMediaImage in a dwImageHandle for copyConvert
-                 // Destroy previous frame_yuv if it exists from a prior iteration failure
+                 // NvMediaImage'i copyConvert için bir dwImageHandle içine sarmalamak gerekiyor
+                 // Önceki iterasyon hatasından frame_yuv varsa yok et
                  if (frame_yuv != DW_NULL_HANDLE) {
                      dwImage_destroy(&frame_yuv);
                      frame_yuv = DW_NULL_HANDLE;
                  }
                 CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
 
-                // 3. Convert YUV (GPU) -> RGBA (GPU) at full resolution
+                // 3. YUV (GPU) -> RGBA (GPU) tam çözünürlükte dönüştür
                 CHECK_DW_ERROR(dwImage_copyConvert(frame_rgba_fullres_, frame_yuv, sdk_));
 
-                // We no longer need the YUV wrapper handle for this frame
-                CHECK_DW_ERROR(dwImage_destroy(&frame_yuv)); // Destroy YUV wrapper
-                frame_yuv = DW_NULL_HANDLE;                 // Reset handle
+                // Bu kare için artık YUV sarmalayıcı handle'a ihtiyacımız yok
+                CHECK_DW_ERROR(dwImage_destroy(&frame_yuv)); // YUV sarmalayıcısını yok et
+                frame_yuv = DW_NULL_HANDLE;                 // Handle'ı sıfırla
 
-                 // --- OpenCV GPU Resizing START ---
+                 // --- OpenCV GPU Yeniden Boyutlandırma BAŞLANGIÇ ---
 
-                // 4. Get NvMedia pointer for the full-res RGBA image
+                // 4. Tam çözünürlüklü RGBA görüntüsü için NvMedia işaretçisini al
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgba_fullres_img_ptr, frame_rgba_fullres_));
 
-                // 5. Map the NvMedia RGBA buffer to be CPU-accessible (but still likely in GPU pinned memory)
+                // 5. NvMedia RGBA tamponunu CPU tarafından erişilebilir olacak şekilde eşle (ancak muhtemelen hala GPU sabitlenmiş bellekte)
                 NvMediaImageSurfaceMap surfaceMap;
                 if (NvMediaImageLock(nvmedia_rgba_fullres_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
                 {
-                    // 6. Create an OpenCV CPU Mat header pointing to the mapped data (NO deep copy yet)
-                    // Use pitch from NvMedia surface if available and differs from width*bpp
-                     size_t full_res_stride = surfaceMap.surface[0].pitch; // Use pitch from NvMedia for correct stride
-                     cpu_rgba_fullres_header_ = cv::Mat(nvmedia_rgba_fullres_img_ptr->prop.height,
-                                                      nvmedia_rgba_fullres_img_ptr->prop.width,
-                                                      CV_8UC4, // RGBA format
-                                                      surfaceMap.surface[0].mapping,
-                                                      full_res_stride);
+                    // 6. Eşlenmiş verilere işaret eden bir OpenCV CPU Mat başlığı oluştur (henüz derin kopya YOK)
+                    // NvMedia yüzeyinden pitch kullanın (genişlik*bpp'den farklıysa)
+                     size_t full_res_stride = surfaceMap.surface[0].pitch; // Doğru adım için NvMedia'dan pitch kullanın
+                     // Geçici bir Mat başlığı oluştur
+                     cv::Mat temp_cpu_header(nvmedia_rgba_fullres_img_ptr->prop.height,
+                                             nvmedia_rgba_fullres_img_ptr->prop.width,
+                                             CV_8UC4, // RGBA formatı
+                                             surfaceMap.surface[0].mapping,
+                                             full_res_stride);
 
-                     // 7. Upload data from the CPU-accessible mapped buffer to the OpenCV GpuMat
-                     // This is a copy operation (potentially Host->Device DMA)
-                     gpu_rgba_fullres_.upload(cpu_rgba_fullres_header_);
+                     // 7. CPU tarafından erişilebilir eşlenmiş tampondan veriyi OpenCV GpuMat'a yükle
+                     // Bu bir kopya işlemidir (potansiyel olarak Host->Device DMA)
+                     gpu_rgba_fullres_.upload(temp_cpu_header); // Yükleme için geçici başlığı kullan
 
-                     // 8. Unlock the NvMedia surface as soon as upload is done
+                     // 8. Yükleme biter bitmez NvMedia yüzeyinin kilidini aç
                      NvMediaImageUnlock(nvmedia_rgba_fullres_img_ptr->img);
 
-                     // 9. Perform resize operation entirely on the GPU
+                     // 9. Yeniden boyutlandırma işlemini tamamen GPU üzerinde gerçekleştir
                      cv::gpu::resize(gpu_rgba_fullres_, gpu_rgba_resized_, cv::Size(TARGET_WIDTH, TARGET_HEIGHT), 0, 0, cv::INTER_LINEAR);
 
-                     // 10. Download the resized image from GPU back to a CPU Mat
-                     // This is a copy operation (Device->Host)
-                     gpu_rgba_resized_.download(cpu_rgba_resized_);
+                     // 10. Yeniden boyutlandırılmış görüntüyü GPU'dan CPU Mat'ına geri indir
+                     // Bu bir kopya işlemidir (Device->Host)
+                     gpu_rgba_resized_.download(cpu_rgba_resized_); // Sınıf üyesi cpu_rgba_resized_'a indir
 
-                     // --- OpenCV GPU Resizing END ---
+                     // --- OpenCV GPU Yeniden Boyutlandırma SON ---
 
 
-                     // --- Populate ROS Message with RESIZED data ---
-                    std_msgs::Header header; // Create header inside the loop
+                     // --- ROS Mesajını YENİDEN BOYUTLANDIRILMIŞ veriyle doldur ---
+                    std_msgs::Header header; // Döngü içinde başlık oluştur
                     header.seq = count++;
-                    header.stamp = ros::Time::now(); // Use current time
-                    header.frame_id = "camera_link"; // Assign a relevant frame_id
+                    header.stamp = ros::Time::now(); // Geçerli zamanı kullan
+                    header.frame_id = "camera_link"; // İlgili bir frame_id ata
 
-                    sensor_msgs::Image &img_msg = *ros_img_ptr_; // Use the class member pointer
+                    sensor_msgs::Image &img_msg = *ros_img_ptr_; // Sınıf üyesi işaretçiyi kullan
                     img_msg.header = header;
-                    img_msg.height = TARGET_HEIGHT; // Use target height
-                    img_msg.width = TARGET_WIDTH;   // Use target width
-                    img_msg.encoding = sensor_msgs::image_encodings::RGBA8; // Encoding matches CV_8UC4 and DW format
+                    img_msg.height = TARGET_HEIGHT; // Hedef yüksekliği kullan
+                    img_msg.width = TARGET_WIDTH;   // Hedef genişliği kullan
+                    img_msg.encoding = sensor_msgs::image_encodings::RGBA8; // Kodlama CV_8UC4 ve DW formatıyla eşleşir
                     img_msg.is_bigendian = 0;
-                    img_msg.step = cpu_rgba_resized_.step; // Get step from the downloaded *resized* CPU mat
+                    img_msg.step = cpu_rgba_resized_.step; // Adımı indirilen *yeniden boyutlandırılmış* CPU mat'ından al
 
                     size_t resized_img_size = img_msg.step * img_msg.height;
                     img_msg.data.resize(resized_img_size);
 
-                    // 11. Copy data from the resized CPU mat into the ROS message buffer
+                    // 11. Yeniden boyutlandırılmış CPU mat'ından veriyi ROS mesaj tamponuna kopyala
                     memcpy(&img_msg.data[0], cpu_rgba_resized_.data, resized_img_size);
 
-                    // 12. Publish the ROS message containing the resized image
+                    // 12. Yeniden boyutlandırılmış görüntüyü içeren ROS mesajını yayınla
                     gmsl_pub_img_.publish(ros_img_ptr_);
 
                 } else {
-                    ROS_ERROR("Failed to lock NvMedia image buffer for reading.");
-                    // Don't attempt unlock if lock failed
+                    ROS_ERROR("Okuma için NvMedia görüntü tamponu kilitlenemedi.");
+                    // Kilit başarısız olduysa kilidi açmaya çalışma
                 }
 
-                // 13. Return the original camera frame buffer
+                // 13. Orijinal kamera kare tamponunu iade et
                 CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame_handle));
 
                 ros::spinOnce();
@@ -350,16 +342,23 @@ public:
         }
         catch (const std::runtime_error &e)
         {
-             ROS_ERROR("Runtime error in publish loop: %s", e.what());
-             // Perform necessary cleanup before exiting or rethrowing
+             ROS_ERROR("Yayınlama döngüsünde çalışma zamanı hatası: %s", e.what());
+             // Çıkmadan veya yeniden fırlatmadan önce gerekli temizliği yap
              if (frame_yuv != DW_NULL_HANDLE) {
-                 dwImage_destroy(&frame_yuv); // Clean up temp handle if error occurred mid-loop
+                 dwImage_destroy(&frame_yuv); // Döngü ortasında hata oluştuysa geçici handle'ı temizle
              }
-             // Consider re-throwing or exiting based on severity
-             // throw; // Re-throw if you want main to catch it
+             // Ciddiyete göre yeniden fırlatmayı veya çıkmayı düşün
+             // throw; // main'in yakalamasını istiyorsanız yeniden fırlatın
+        }
+        catch (const std::exception& e) { // Daha genel std::exception yakala
+             ROS_ERROR("Yayınlama döngüsünde standart istisna yakalandı: %s", e.what());
+             if (frame_yuv != DW_NULL_HANDLE) {
+                 dwImage_destroy(&frame_yuv);
+             }
+             // throw;
         }
         catch (...) {
-             ROS_ERROR("Unknown exception caught in publish loop.");
+             ROS_ERROR("Yayınlama döngüsünde bilinmeyen istisna yakalandı.");
              if (frame_yuv != DW_NULL_HANDLE) {
                  dwImage_destroy(&frame_yuv);
              }
@@ -369,20 +368,20 @@ public:
 };
 
 //------------------------------------------------------------------------------
-int main(int argc, char *argv[]) // Use standard main signature
+int main(int argc, char *argv[]) // Standart main imzası kullan
 {
-    po::options_description desc{"Options"};
+    po::options_description desc{"Seçenekler"};
     desc.add_options()
-        ("help,h", "Help screen")
+        ("help,h", "Yardım ekranı")
         ("camera-type", po::value<std::string>()->default_value("ar0231-rccb-bae-sf3324"),
-            "Camera GMSL type (see sample_sensors_info)")
-        ("camera-port", po::value<std::string>()->default_value("a"), "Camera CSI port (a, c, e, g)")
-        ("tegra-slave", po::value<std::string>()->default_value("0"), "Enable slave mode (Tegra B only)")
-        ("custom-board", po::value<std::string>()->default_value("0"), "Use custom board config (set to 1 if true)")
-        ("custom-config", po::value<std::string>()->default_value(""), "Path to custom board/camera config file/data (used if custom-board=1)");
-        // Add target width/height options if desired
-        // ("target-width", po::value<int>()->default_value(640), "Target width for output image")
-        // ("target-height", po::value<int>()->default_value(480), "Target height for output image")
+            "Kamera GMSL tipi (bkz. sample_sensors_info)")
+        ("camera-port", po::value<std::string>()->default_value("a"), "Kamera CSI portu (a, c, e, g)")
+        ("tegra-slave", po::value<std::string>()->default_value("0"), "Slave modunu etkinleştir (yalnızca Tegra B)")
+        ("custom-board", po::value<std::string>()->default_value("0"), "Özel kart yapılandırması kullan (doğruysa 1 yapın)")
+        ("custom-config", po::value<std::string>()->default_value(""), "Özel kart/kamera yapılandırma dosyası/verisi yolu (custom-board=1 ise kullanılır)");
+        // İstenirse hedef genişlik/yükseklik seçenekleri ekleyin
+        // ("target-width", po::value<int>()->default_value(640), "Çıktı görüntüsü için hedef genişlik")
+        // ("target-height", po::value<int>()->default_value(480), "Çıktı görüntüsü için hedef yükseklik")
 
 
     po::variables_map args;
@@ -394,44 +393,46 @@ int main(int argc, char *argv[]) // Use standard main signature
             return 0;
         }
 
-        po::notify(args); // Check for errors, apply default values
+        po::notify(args); // Hataları kontrol et, varsayılan değerleri uygula
 
-        // Update target resolution if provided via command line
+        // Komut satırından sağlanmışsa hedef çözünürlüğü güncelle
         // if (args.count("target-width")) TARGET_WIDTH = args["target-width"].as<int>();
         // if (args.count("target-height")) TARGET_HEIGHT = args["target-height"].as<int>();
 
     } catch (const po::error &ex) {
-        std::cerr << "Error parsing command line options: " << ex.what() << std::endl;
+        std::cerr << "Komut satırı seçenekleri ayrıştırılırken hata: " << ex.what() << std::endl;
         std::cerr << desc << std::endl;
         return 1;
     } catch (const std::exception& e) {
-         std::cerr << "Error: " << e.what() << std::endl;
+         std::cerr << "Hata: " << e.what() << std::endl;
          return 1;
     }
 
 
     try {
-        ROS_INFO("Initializing CameraGMSL node...");
+        ROS_INFO("CameraGMSL düğümü başlatılıyor...");
+        // ROS'u main içinde başlatmak daha standarttır
+        // ros::init(argc, argv, "camera_gmsl_publisher", ros::init_options::NoSigintHandler); // Eğer sinyal yönetimi gerekiyorsa
+        // Eğer CameraGMSL içinde başlatılıyorsa bu satırı kaldırın.
+
         CameraGMSL cam(args);
         cam.publish();
     } catch (const std::runtime_error &e) {
-        ROS_FATAL("Initialization or processing failed: %s", e.what());
-        // Consider ROS logging or specific error handling here
-        std::cerr << "FATAL ERROR: " << e.what() << std::endl; // Also print to cerr
-        return 1; // Indicate failure
+        ROS_FATAL("Başlatma veya işleme başarısız oldu: %s", e.what());
+        std::cerr << "KRİTİK HATA: " << e.what() << std::endl; // cerr'e de yazdır
+        return 1; // Başarısızlığı belirt
     }
      catch (const std::exception& e) {
-         ROS_FATAL("Caught standard exception: %s", e.what());
-         std::cerr << "FATAL ERROR (std::exception): " << e.what() << std::endl;
+         ROS_FATAL("Standart istisna yakalandı: %s", e.what());
+         std::cerr << "KRİTİK HATA (std::exception): " << e.what() << std::endl;
          return 1;
     }
     catch (...) {
-         ROS_FATAL("Caught unknown exception during execution.");
-         std::cerr << "FATAL ERROR (unknown exception)" << std::endl;
+         ROS_FATAL("Yürütme sırasında bilinmeyen istisna yakalandı.");
+         std::cerr << "KRİTİK HATA (bilinmeyen istisna)" << std::endl;
          return 1;
     }
 
-
-    ROS_INFO("CameraGMSL node finished.");
-    return 0; // Indicate success
+    ROS_INFO("CameraGMSL düğümü tamamlandı.");
+    return 0; // Başarıyı belirt
 }
