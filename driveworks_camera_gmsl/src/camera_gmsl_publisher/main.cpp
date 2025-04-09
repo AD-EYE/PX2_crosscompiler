@@ -122,7 +122,8 @@ public:
 
             dwCameraFrameHandle_t frame;
             dwStatus status = DW_NOT_READY;
-            dwTime_t start_time = dwContext_getCurrentTime(sdk_);
+            dwTime_t start_time = 0; // Initialize
+            CHECK_DW_ERROR(dwContext_getCurrentTime(&start_time, sdk_)); // Get start time correctly
             const dwTime_t MAX_WAIT_US = 10000000; // 10 seconds max wait
             do {
                 status = dwSensorCamera_readFrame(&frame, 0, 66000, camera_);
@@ -130,19 +131,26 @@ public:
                     CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame)); // Return the frame immediately after successful read
                     break; // Exit loop if successful
                 }
-                if (dwContext_getCurrentTime(sdk_) - start_time > MAX_WAIT_US) {
-                    throw std::runtime_error("Timeout waiting for camera to start.");
+
+                // Check for timeout correctly
+                dwTime_t current_time = 0;
+                CHECK_DW_ERROR(dwContext_getCurrentTime(¤t_time, sdk_));
+                if (current_time - start_time > MAX_WAIT_US) {
+                    // Construct the error message before throwing
+                    std::string error_msg = "Timeout waiting for camera to start. Last status: " + std::string(dwGetStatusName(status));
+                    throw std::runtime_error(error_msg);
                 }
                  // Optional: Short sleep to avoid busy-waiting
-                // std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                 // std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Requires #include <thread> and #include <chrono>
             } while (status == DW_NOT_READY || status == DW_TIME_OUT); // Check for timeout too
 
             // something wrong happened, aborting
             if (status != DW_SUCCESS) {
-                throw std::runtime_error("Camera did not start correctly. Final status: " + std::string(dwGetStatusName(status)));
+                 std::string error_msg = "Camera did not start correctly after loop. Final status: " + std::string(dwGetStatusName(status));
+                throw std::runtime_error(error_msg);
             }
 
-            // CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame)); // Already returned in the loop
+            // Frame already returned inside the loop if successful
 
             CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera_properties_, camera_));
             ROS_INFO("Successfully initialized camera with native resolution of %dx%d at framerate of %f FPS. Publishing at fixed %dx%d.\n",
