@@ -69,9 +69,9 @@ private:
 
     po::variables_map args_;
 
-    // Fixed target resolution
-    const int TARGET_WIDTH = 512;
-    const int TARGET_HEIGHT = 512;
+    // Fixed target resolution (use unsigned type)
+    const uint32_t TARGET_WIDTH = 512;
+    const uint32_t TARGET_HEIGHT = 512;
 
 public:
     CameraGMSL(const po::variables_map args): args_(args)
@@ -246,7 +246,8 @@ public:
                     // ROS_DEBUG("Copying final %dx%d RGBA data to ROS message...", TARGET_WIDTH, TARGET_HEIGHT);
                     // Ensure the pitch matches the width * bytes_per_pixel for a contiguous buffer
                     // NvMedia pitch might be different due to alignment. We need to copy row by row if pitch != width*4.
-                    size_t expected_pitch = TARGET_WIDTH * 4;
+                    // size_t expected_pitch = TARGET_WIDTH * 4; // Implicit conversion might occur
+                    size_t expected_pitch = static_cast<size_t>(TARGET_WIDTH) * 4; // Explicit cast for clarity
                     if (surfaceMap.surface[0].pitch == expected_pitch) {
                         // If pitch matches, we can do a single memcpy (faster)
                          memcpy(ros_img_ptr->data.data(), surfaceMap.surface[0].mapping, img_size);
