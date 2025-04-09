@@ -70,8 +70,8 @@ private:
     dwCameraProperties camera_properties_;
 
     // Resolution properties - FIXED
-    const int TARGET_WIDTH = 960;
-    const int TARGET_HEIGHT = 604;
+    const int TARGET_WIDTH = 512;
+    const int TARGET_HEIGHT = 512;
 
     po::variables_map args_;
 
