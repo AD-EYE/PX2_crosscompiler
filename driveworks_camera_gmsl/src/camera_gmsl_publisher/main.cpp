@@ -44,20 +44,24 @@
                                                 + std::string("\n at " __FILE__ ":") + std::to_string(__LINE__)); \
                     }};
 
-// Helper function to get format string (basic implementation)
+// Helper function to get format string (Updated for likely DW 1.2 compatibility)
 const char* dwImageFormatToStr(dwImageFormat format) {
     switch (format) {
+        // Common formats likely in DW 1.2
         case DW_IMAGE_FORMAT_RGBA_UINT8: return "RGBA_UINT8";
         case DW_IMAGE_FORMAT_RGB_UINT8_PLANAR: return "RGB_UINT8_PLANAR";
-        // Add common YUV formats - consult dw/core/Types.h for your DW version
         case DW_IMAGE_FORMAT_YUV420_UINT8_PLANAR: return "YUV420_UINT8_PLANAR";
         case DW_IMAGE_FORMAT_YUV420_UINT8_SEMIPLANAR: return "YUV420_UINT8_SEMIPLANAR"; // Often NV12
-        case DW_IMAGE_FORMAT_YUV422_UINT8_PLANAR: return "YUV422_UINT8_PLANAR";
-        case DW_IMAGE_FORMAT_YUV422_UINT8_SEMIPLANAR: return "YUV422_UINT8_SEMIPLANAR"; // Often NV16
-        case DW_IMAGE_FORMAT_YUV444_UINT8_PLANAR: return "YUV444_UINT8_PLANAR";
-        case DW_IMAGE_FORMAT_YUV_UINT8_PLANAR: return "YUV_UINT8_PLANAR"; // Generic YUV Planar?
-        // Add other formats as needed
-        default: return "UNKNOWN_FORMAT";
+
+        // Removed formats likely not in DW 1.2:
+        // case DW_IMAGE_FORMAT_YUV422_UINT8_PLANAR: return "YUV422_UINT8_PLANAR";
+        // case DW_IMAGE_FORMAT_YUV422_UINT8_SEMIPLANAR: return "YUV422_UINT8_SEMIPLANAR";
+        // case DW_IMAGE_FORMAT_YUV444_UINT8_PLANAR: return "YUV444_UINT8_PLANAR";
+        // case DW_IMAGE_FORMAT_YUV_UINT8_PLANAR: return "YUV_UINT8_PLANAR";
+
+        // Add other formats known to be in DW 1.2 if needed (e.g., Bayer)
+
+        default: return "UNKNOWN_OR_UNHANDLED_FORMAT"; // More specific default
     }
 }
 
@@ -89,7 +93,7 @@ public:
         CHECK_DW_ERROR(dwSAL_initialize(&sal_, sdk_));
 
         dwSensorParams params;
-        // ***** MODIFICATION: Request YUV output again *****
+        // ***** Request YUV output *****
         std::string parameter_string = std::string("output-format=yuv,fifo-size=3");
 
         parameter_string += std::string(",camera-type=") + args_["camera-type"].as<std::string>().c_str();
@@ -133,8 +137,12 @@ public:
                          if(dwImage_getProperties(&props, tmp_h) == DW_SUCCESS) {
                              ROS_INFO("Init Frame Properties: Format=%d (%s), W=%u, H=%u",
                                       props.format, dwImageFormatToStr(props.format), props.width, props.height);
+                         } else {
+                             ROS_WARN("Could not get properties of initial frame image handle: %s", dwGetStatusName(dwImage_getProperties(&props, tmp_h))); // Log status here
                          }
                          dwImage_destroy(&tmp_h);
+                     } else {
+                        ROS_WARN("Could not bind NvMedia image to temporary handle in init: %s", dwGetStatusName(dwImage_createAndBindNvMedia(&tmp_h, nvmedia_ptr->img))); // Log status here
                      }
                  } else {
                      ROS_WARN("Could not get NvMedia Image details from first frame in init (Status: %s)", dwGetStatusName(imgStatus));
@@ -337,11 +345,10 @@ public:
     }
 };
 
-// main function remains the same as the previous C++11 compatible version
 //------------------------------------------------------------------------------
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "camera_gmsl_gpu_convert_resize"); // Node name reflecting strategy
+    ros::init(argc, argv, "camera_gmsl_gpu_convert_resize");
 
     po::options_description desc{"Options"};
     desc.add_options()
