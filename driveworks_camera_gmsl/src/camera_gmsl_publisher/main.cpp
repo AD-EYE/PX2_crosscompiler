@@ -58,14 +58,17 @@ private:
 
     // Image handles and properties
     dwImageHandle_t frame_rgb_ = DW_NULL_HANDLE; 
-    dwImageHandle_t frame_rgb_half_ = DW_NULL_HANDLE; // Half resolution image
     dwSensorHandle_t camera_ = DW_NULL_HANDLE;
     dwImageProperties camera_image_properties_;
     dwCameraProperties camera_properties_;
     
-    // Dimensions for half resolution
+    // Half resolution dimensions
     uint32_t half_width_;
     uint32_t half_height_;
+
+    // Buffer for the half-resolution image
+    unsigned char* half_res_buffer_ = nullptr;
+    size_t half_res_buffer_size_ = 0;
 
     po::variables_map args_;
      
@@ -130,6 +133,10 @@ public:
             CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camera_properties_, camera_));
             ROS_INFO("Successfully initialized camera with resolution of %dx%d at framerate of %f FPS\n",
                 camera_properties_.resolution.x, camera_properties_.resolution.y, camera_properties_.framerate);
+                
+            // Calculate half resolution dimensions
+            half_width_ = camera_properties_.resolution.x / 2;
+            half_height_ = camera_properties_.resolution.y / 2;
         }
 
         //ROS initialization
@@ -152,19 +159,11 @@ public:
             rgb_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
             CHECK_DW_ERROR(dwImage_create(&frame_rgb_, rgb_img_prop, sdk_));
             
-            // Calculate half resolution dimensions
-            half_width_ = camera_properties_.resolution.x / 2;
-            half_height_ = camera_properties_.resolution.y / 2;
+            // Allocate buffer for half-resolution image (RGBA format = 4 bytes per pixel)
+            half_res_buffer_size_ = half_width_ * half_height_ * 4;
+            half_res_buffer_ = new unsigned char[half_res_buffer_size_];
             
-            // Create half resolution image
-            dwImageProperties rgb_half_img_prop{};
-            rgb_half_img_prop.height = half_height_;
-            rgb_half_img_prop.width = half_width_;
-            rgb_half_img_prop.type = DW_IMAGE_NVMEDIA;
-            rgb_half_img_prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
-            CHECK_DW_ERROR(dwImage_create(&frame_rgb_half_, rgb_half_img_prop, sdk_));
-            
-            ROS_INFO("Successfully initialized nvmedia images. Original: %dx%d, Half: %dx%d\n", 
+            ROS_INFO("Successfully initialized nvmedia: Original resolution: %dx%d, Half resolution: %dx%d\n", 
                      camera_properties_.resolution.x, camera_properties_.resolution.y,
                      half_width_, half_height_);
         }
@@ -178,13 +177,43 @@ public:
             dwSAL_releaseSensor(&camera_);
         }
 
-        //destroy created images
+        //destroy created image
         dwImage_destroy(&frame_rgb_);
-        dwImage_destroy(&frame_rgb_half_);
+        
+        // Free half resolution buffer
+        if(half_res_buffer_) {
+            delete[] half_res_buffer_;
+            half_res_buffer_ = nullptr;
+        }
 
         dwSAL_release(&sal_);
         dwRelease(&sdk_);
         dwLogger_release();
+    }
+    
+    // Helper function to downsample an image by averaging 2x2 blocks
+    void downsampleRGBA(const unsigned char* src, unsigned char* dst, int srcWidth, int srcHeight)
+    {
+        int dstWidth = srcWidth / 2;
+        int dstHeight = srcHeight / 2;
+        
+        for (int y = 0; y < dstHeight; y++) {
+            for (int x = 0; x < dstWidth; x++) {
+                int srcX = x * 2;
+                int srcY = y * 2;
+                
+                // Average 2x2 block of pixels for each channel (R,G,B,A)
+                for (int c = 0; c < 4; c++) {
+                    int srcPos1 = (srcY * srcWidth + srcX) * 4 + c;
+                    int srcPos2 = (srcY * srcWidth + srcX + 1) * 4 + c;
+                    int srcPos3 = ((srcY + 1) * srcWidth + srcX) * 4 + c;
+                    int srcPos4 = ((srcY + 1) * srcWidth + srcX + 1) * 4 + c;
+                    
+                    int sum = src[srcPos1] + src[srcPos2] + src[srcPos3] + src[srcPos4];
+                    dst[(y * dstWidth + x) * 4 + c] = (unsigned char)(sum / 4);
+                }
+            }
+        }
     }
 
     void publish()
@@ -205,7 +234,6 @@ public:
                 dwImageHandle_t frame_yuv;
                 dwImageNvMedia* nvmedia_yuv_img_ptr;
                 dwImageNvMedia* nvmedia_rgb_img_ptr;
-                dwImageNvMedia* nvmedia_rgb_half_img_ptr;
 
                 sensor_msgs::Image &img_msg = *ros_img_ptr_; // >> message to be sent
                 std_msgs::Header header; // empty header
@@ -217,69 +245,43 @@ public:
 
                 CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvmedia_yuv_img_ptr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
-                CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_half_img_ptr, frame_rgb_half_));
                 CHECK_DW_ERROR(dwImage_createAndBindNvMedia(&frame_yuv, nvmedia_yuv_img_ptr->img));
                 CHECK_DW_ERROR(dwImage_copyConvert(frame_rgb_, frame_yuv, sdk_));
                 CHECK_DW_ERROR(dwImage_getNvMedia(&nvmedia_rgb_img_ptr, frame_rgb_));
                 
-                // GPU-accelerated downsampling with NvMedia
-                NvMediaBlit *blit = NULL;
-                blit = NvMediaBlitCreate();
-                if (blit) {
-                    // Configure the blit parameters for 2x downsampling
-                    NvMediaRect srcRect, dstRect;
-                    srcRect.x = 0;
-                    srcRect.y = 0;
-                    srcRect.width = nvmedia_rgb_img_ptr->prop.width;
-                    srcRect.height = nvmedia_rgb_img_ptr->prop.height;
-                    
-                    dstRect.x = 0;
-                    dstRect.y = 0;
-                    dstRect.width = half_width_;
-                    dstRect.height = half_height_;
-                    
-                    // Perform the GPU blit operation (downsampling)
-                    NvMediaBlitParameters params;
-                    memset(&params, 0, sizeof(params));
-                    params.srcRect = &srcRect;
-                    params.dstRect = &dstRect;
-                    params.filterType = NVMEDIA_BLIT_FILTER_BILINEAR; // Use bilinear filtering for better quality
-                    
-                    NvMediaStatus status = NvMediaBlitSurface(blit, 
-                                                nvmedia_rgb_half_img_ptr->img, 
-                                                nvmedia_rgb_img_ptr->img, 
-                                                &params);
-                                                
-                    if (status != NVMEDIA_STATUS_OK) {
-                        ROS_WARN("GPU downsampling failed with status %d\n", status);
-                    }
-                    
-                    NvMediaBlitDestroy(blit);
-                } else {
-                    ROS_WARN("Failed to create NvMediaBlit object for downsampling\n");
-                }
-
-                header.seq = count; // user defined counter
-                header.stamp = ros::Time::now(); 
-                    
-                img_msg.header = header;
-                img_msg.height = half_height_;
-                img_msg.width = half_width_;
-                img_msg.encoding = sensor_msgs::image_encodings::RGBA8;
-                
-                img_msg.step = img_msg.width * 4; // 1 Byte per 4 Channels of the RGBA format
-
-                img_size = img_msg.step * img_msg.height;
-                img_msg.data.resize(img_size);
+                // Get the original resolution image data
                 NvMediaImageSurfaceMap surfaceMap;
-                if (NvMediaImageLock(nvmedia_rgb_half_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
+                if (NvMediaImageLock(nvmedia_rgb_img_ptr->img, NVMEDIA_IMAGE_ACCESS_READ, &surfaceMap) == NVMEDIA_STATUS_OK)
                 {
                     unsigned char* buffer = (unsigned char*)surfaceMap.surface[0].mapping;
-                    memcpy((char *)( &img_msg.data[0] ) , buffer , img_size);
+                    
+                    // Downsample the image (CPU implementation since GPU version isn't available)
+                    downsampleRGBA(buffer, half_res_buffer_, 
+                                  nvmedia_rgb_img_ptr->prop.width, 
+                                  nvmedia_rgb_img_ptr->prop.height);
+                    
+                    NvMediaImageUnlock(nvmedia_rgb_img_ptr->img);
+                    
+                    // Setup ROS message
+                    header.seq = count; // user defined counter
+                    header.stamp = ros::Time::now(); 
+                        
+                    img_msg.header = header;
+                    img_msg.height = half_height_;
+                    img_msg.width = half_width_;
+                    img_msg.encoding = sensor_msgs::image_encodings::RGBA8;
+                    
+                    img_msg.step = img_msg.width * 4; // 1 Byte per 4 Channels of the RGBA format
+
+                    img_size = img_msg.step * img_msg.height;
+                    img_msg.data.resize(img_size);
+                    
+                    // Copy the downsampled image to the ROS message
+                    memcpy((char *)(&img_msg.data[0]), half_res_buffer_, img_size);
                     gmsl_pub_img_.publish(ros_img_ptr_);
-                    NvMediaImageUnlock(nvmedia_rgb_half_img_ptr->img);
                 }
-                //   cleanup
+                
+                // Cleanup
                 CHECK_DW_ERROR(dwImage_destroy(&frame_yuv));       
                 // return frame
                 CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
