@@ -53,22 +53,30 @@ void initDriveWorks() {
 //-----------------------------------------
 // Init Camera
 //-----------------------------------------
-void initCamera(const std::string& camType, int csiPort, bool isSlave) {
-    std::string p = "output-format=processed,";
-    // specify single camera group and count
-    p += "camera-group=a,";
-    p += "camera-count=1,";
-    p += "camera-type=" + camType + ",";
-    p += "csi-port="  + std::to_string(csiPort) + ",";
-    p += "slave=";
-    p += (isSlave ? "1" : "0");
+void initCamera(const std::string& camName, int csiPort, bool isSlave) {
+    // Build sensor parameters string using standard GMSL plugin keys
+    // Map csiPort to interface name
+    std::string interface;
+    switch(csiPort) {
+        case 0: interface = "csi-ab"; break;
+        case 1: interface = "csi-cd"; break;
+        case 2: interface = "csi-ef"; break;
+        case 3: interface = "csi-gh"; break;
+        default: interface = "csi-ab";
+    }
+    std::string p;
+    p += "camera-name=" + camName + ",";
+    p += "interface="    + interface + ",";
+    p += "link=0,";
+    p += "output-format=processed,";
+    p += "CPHY-mode=1,";           // use CPHY
+    p += std::string("slave=") + (isSlave ? "true" : "false");
 
     dwSensorParams sParams = {};
-    // Specify the GMSL camera protocol
     sParams.protocol   = "camera.gmsl";
     sParams.parameters = p.c_str();
     CHECK_DW_ERROR(dwSAL_createSensor(&camera_, sParams, sal_));
-    CHECK_DW_ERROR(dwSensor_start(camera_));
+    CHECK_DW_ERROR(dwSensor_start(camera_));(camera_));
 
     // First frame
     dwCameraFrameHandle_t frame;
