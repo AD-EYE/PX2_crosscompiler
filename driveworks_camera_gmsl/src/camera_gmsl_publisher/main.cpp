@@ -9,7 +9,7 @@
 #include <dw/core/Logger.h>
 #include <dw/sensors/Sensors.h>
 #include <dw/sensors/camera/Camera.h>
-#include <dw/image/Image.h>               // dwImage_create, dwImage_copyConvert, dwImage_getCpuPointer, dwImage_release
+#include <dw/image/Image.h>               // dwImage_create, dwImage_copyConvert, dwImage_getCPU, dwImage_destroy
 
 #include <stdexcept>
 #include <string>
@@ -18,13 +18,13 @@
 //-----------------------------------------
 // Error-check macro
 //-----------------------------------------
-#define CHECK_DW_ERROR(expr) do {                       \
-    dwStatus _status = (expr);                          \
-    if (_status != DW_SUCCESS) {                        \
-        ROS_ERROR("DriveWorks error %d at %s:%d",     \
-                  _status, __FILE__, __LINE__);         \
+#define CHECK_DW_ERROR(expr) do {                         \
+    dwStatus _status = (expr);                            \
+    if (_status != DW_SUCCESS) {                          \
+        ROS_ERROR("DriveWorks error %d at %s:%d",       \
+                  _status, __FILE__, __LINE__);           \
         throw std::runtime_error(std::to_string(_status));\
-    }                                                   \
+    }                                                     \
 } while(0)
 
 //-----------------------------------------
@@ -56,8 +56,10 @@ void initDriveWorks() {
 void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     std::string p = "output-format=processed,";
     p += "camera-type=" + camType + ",";
-    p += "csi-port=" + std::to_string(csiPort) + ",";
-    p += "slave=" + (isSlave ? "1" : "0");
+    p += "csi-port="  + std::to_string(csiPort) + ",";
+    p += "slave=";
+    p += (isSlave ? "1" : "0");
+
     dwSensorParams sParams = {};
     sParams.parameters = p.c_str();
     CHECK_DW_ERROR(dwSAL_createSensor(&camera_, sParams, sal_));
@@ -82,13 +84,16 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
 //-----------------------------------------
 void initHalfResImages() {
     dwImageProperties gp = {};
-    gp.width  = HALF_WIDTH; gp.height = HALF_HEIGHT;
+    gp.width  = HALF_WIDTH;
+    gp.height = HALF_HEIGHT;
     gp.format = DW_IMAGE_FORMAT_RGBA_UINT8;
     gp.type   = DW_IMAGE_CUDA;
     CHECK_DW_ERROR(dwImage_create(&imgCUDA_half, gp, sdk_));
+    
     dwImageProperties cp = gp;
     cp.type = DW_IMAGE_CPU;
     CHECK_DW_ERROR(dwImage_create(&imgCPU_half, cp, sdk_));
+
     ROS_INFO("Half-res images: %dx%d", HALF_WIDTH, HALF_HEIGHT);
 }
 
@@ -98,20 +103,30 @@ void initHalfResImages() {
 void processLoop() {
     dwCameraFrameHandle_t frame;
     while (ros::ok()) {
+        // Acquire full-res frame
         CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, 0, 100000, camera_));
-        // NVMedia image
+
+        // Get NvMedia image
         dwImageNvMedia* nvPtr = nullptr;
         CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvPtr,
                         DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
+        
         // NVMedia->CUDA
         CHECK_DW_ERROR(dwImage_copyConvert(imgCUDA_half,
-                          (dwImageHandle_t)nvPtr, sdk_));
+                            reinterpret_cast<dwImageHandle_t>(nvPtr),
+                            sdk_));
         // CUDA->CPU
         CHECK_DW_ERROR(dwImage_copyConvert(imgCPU_half,
-                          imgCUDA_half, sdk_));
-        // Publish
-        uint8_t* data; size_t pitch;
-        CHECK_DW_ERROR(dwImage_getCpuPointer(&data, &pitch, imgCPU_half));
+                            imgCUDA_half,
+                            sdk_));
+        
+        // Retrieve CPU buffer
+        dwImageCPU* cpuImg = nullptr;
+        CHECK_DW_ERROR(dwImage_getCPU(&cpuImg, imgCPU_half));
+        uint8_t* data = cpuImg->data[0];
+        size_t  pitch = cpuImg->pitch[0];
+
+        // Publish via ROS
         sensor_msgs::Image msg;
         msg.header.stamp    = ros::Time::now();
         msg.header.frame_id = "gmsl_camera";
@@ -120,9 +135,10 @@ void processLoop() {
         msg.encoding        = sensor_msgs::image_encodings::RGBA8;
         msg.is_bigendian    = false;
         msg.step            = pitch;
-        msg.data.assign(data, data + pitch*HALF_HEIGHT);
+        msg.data.assign(data, data + pitch * HALF_HEIGHT);
         pub_img.publish(msg);
-        // Cleanup
+
+        // Return frame
         CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
         ros::spinOnce();
     }
@@ -132,12 +148,12 @@ void processLoop() {
 // Shutdown
 //-----------------------------------------
 void sigHandler(int) {
-    if (camera_) dwSensor_stop(camera_);
-    if (camera_) dwSAL_releaseSensor(&camera_);
-    if (imgCUDA_half) dwImage_release(&imgCUDA_half);
-    if (imgCPU_half)  dwImage_release(&imgCPU_half);
-    if (sal_) dwSAL_release(&sal_);
-    if (sdk_) dwRelease(&sdk_);
+    if (camera_)         dwSensor_stop(camera_);
+    if (camera_)         dwSAL_releaseSensor(&camera_);
+    if (imgCUDA_half)    dwImage_destroy(imgCUDA_half);
+    if (imgCPU_half)     dwImage_destroy(imgCPU_half);
+    if (sal_)            dwSAL_release(&sal_);
+    if (sdk_)            dwRelease(&sdk_);
     ros::shutdown();
     exit(0);
 }
@@ -155,7 +171,7 @@ int main(int argc, char** argv) {
         initCamera("AR0234", 0, false);
         initHalfResImages();
         processLoop();
-    } catch(const std::exception& e) {
+    } catch (const std::exception& e) {
         ROS_FATAL("%s", e.what());
         sigHandler(0);
     }
