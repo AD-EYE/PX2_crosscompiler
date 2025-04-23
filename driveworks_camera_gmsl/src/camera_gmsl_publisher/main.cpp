@@ -63,6 +63,9 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
 
     dwSensorParams sParams = {};
     sParams.protocol   = "camera.gmsl";
+    ROS_INFO("dwSAL_createSensor parameters: %s", paramsStr.c_str());
+    // Also specify resolution to match sensor native
+    paramsStr += ",resolution=" + std::to_string(" + std::to_string(1920) + ") + "x" + std::to_string(" + std::to_string(1208) + ");
     sParams.parameters = paramsStr.c_str();
 
     CHECK_DW_ERROR(dwSAL_createSensor(&camera_, sParams, sal_));
