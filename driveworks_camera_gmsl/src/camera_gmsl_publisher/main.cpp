@@ -7,9 +7,10 @@
 #include <dw/core/Context.h>
 #include <dw/core/VersionCurrent.h>        // for DW_VERSION
 #include <dw/core/Logger.h>
+#include <dw/core/Error.h>                 // for dwGetLastErrorString
 #include <dw/sensors/Sensors.h>
 #include <dw/sensors/camera/Camera.h>
-#include <dw/image/Image.h>               // dwImage_copyConvert, dwImage_create, dwImage_getCpuPointer / dwImage_getCudaPointer
+#include <dw/image/Image.h>               // dwImage_copyConvert, dwImage_create, dwImage_getCpuPointer
 
 #include <stdexcept>
 #include <string>
@@ -23,7 +24,7 @@
     if (_status != DW_SUCCESS) {                        \
         const char* _msg = nullptr;                     \
         dwGetLastErrorString(&_msg);                    \
-        ROS_ERROR("DriveWorks error %s at %s:%d",    \
+        ROS_ERROR("DriveWorks error %s at %s:%d",     \
                   _msg, __FILE__, __LINE__);           \
         throw std::runtime_error(_msg);                 \
     }                                                   \
@@ -54,26 +55,22 @@ void initDriveWorks() {
 }
 
 //-----------------------------------------
-// Configure GMSL sensor for CUDA output
+// Configure GMSL sensor
 //-----------------------------------------
 void initCamera(const std::string& camType, int csiPort, bool isSlave) {
+    // Build parameters string
+    std::string paramStr = "output-format=processed,";
+    paramStr += "camera-type="  + camType + ",";
+    paramStr += "csi-port="     + std::to_string(csiPort) + ",";
+    paramStr += "slave="        + (isSlave?"1":"0");
+
     dwSensorParams params = {};
-    params.parameters =
-        std::string("output-format=processed,") +
-        "camera-type="  + camType    + "," +
-        "csi-port="     + std::to_string(csiPort) + "," +
-        "slave="        + (isSlave?"1":"0") ;
+    params.parameters = paramStr.c_str();
 
     CHECK_DW_ERROR(dwSAL_createSensor(&camera_, params, sal_));
     CHECK_DW_ERROR(dwSensor_start(camera_));
 
-    // request CUDA output via setting output properties
-    dwImageProperties outputProps = {};
-    outputProps.type   = DW_IMAGE_CUDA;
-    outputProps.format = DW_IMAGE_FORMAT_RGBA_UINT8;
-    CHECK_DW_ERROR(dwSensorCamera_setOutputProperties(camera_, outputProps));
-
-    // wait for first frame
+    // Wait for first valid frame
     dwCameraFrameHandle_t frame;
     dwStatus stat;
     do {
@@ -81,6 +78,7 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     } while (stat == DW_NOT_READY);
     if (stat != DW_SUCCESS) throw std::runtime_error("Camera failed to start");
 
+    // Retrieve properties
     dwCameraProperties camProps;
     CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camProps, camera_));
     ROS_INFO("Camera: %dx%d @ %.2f FPS", camProps.resolution.x, camProps.resolution.y, camProps.framerate);
@@ -88,7 +86,7 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
 }
 
 //-----------------------------------------
-// Create half-res CUDA & CPU images
+// Create half-res images
 //-----------------------------------------
 void initHalfResImages() {
     dwImageProperties gpuProps = {};
@@ -106,32 +104,33 @@ void initHalfResImages() {
 }
 
 //-----------------------------------------
-// Downsample & publish
+// Capture, downsample & publish
 //-----------------------------------------
 void processLoop() {
     dwCameraFrameHandle_t frame;
     while (ros::ok()) {
         CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, 0, 100000, camera_));
 
+        // Get native processed frame as CUDA image
         dwImageHandle_t inCUDA = DW_NULL_HANDLE;
-        CHECK_DW_ERROR(dwSensorCamera_getImageCuda(&inCUDA, DW_CAMERA_OUTPUT_PROCESSED, frame));
+        CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&inCUDA, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
 
-        // downsample (CUDA->CUDA)
-        CHECK_DW_ERROR(dwImage_copyConvert(sdk_, imgCUDA_half, inCUDA));
-        // CUDA->CPU copy
-        CHECK_DW_ERROR(dwImage_copyConvert(sdk_, imgCPU_half, imgCUDA_half));
+        // Downsample: CUDA->CUDA
+        CHECK_DW_ERROR(dwImage_copyConvert(imgCUDA_half, inCUDA, sdk_));
+        // Transfer to CPU: CUDA->CPU
+        CHECK_DW_ERROR(dwImage_copyConvert(imgCPU_half, imgCUDA_half, sdk_));
 
-        // publish to ROS
+        // Publish via ROS
         uint8_t* cpuPtr; size_t rowPitch;
         CHECK_DW_ERROR(dwImage_getCpuPointer(&cpuPtr, &rowPitch, imgCPU_half));
         sensor_msgs::Image msg;
-        msg.header.stamp = ros::Time::now();
+        msg.header.stamp    = ros::Time::now();
         msg.header.frame_id = "gmsl_camera";
-        msg.height = HALF_HEIGHT;
-        msg.width  = HALF_WIDTH;
-        msg.encoding = sensor_msgs::image_encodings::RGBA8;
-        msg.is_bigendian = false;
-        msg.step = rowPitch;
+        msg.height          = HALF_HEIGHT;
+        msg.width           = HALF_WIDTH;
+        msg.encoding        = sensor_msgs::image_encodings::RGBA8;
+        msg.is_bigendian    = false;
+        msg.step            = rowPitch;
         msg.data.assign(cpuPtr, cpuPtr + rowPitch * HALF_HEIGHT);
         pub_img.publish(msg);
 
@@ -141,9 +140,10 @@ void processLoop() {
 }
 
 //-----------------------------------------
-// Shutdown
+// Shutdown handler
 //-----------------------------------------
 void sigHandler(int sig) {
+    (void)sig;
     if (camera_) dwSensor_stop(camera_);
     if (camera_) dwSAL_releaseSensor(&camera_);
     if (imgCUDA_half) dwImage_release(&imgCUDA_half);
@@ -154,6 +154,9 @@ void sigHandler(int sig) {
     exit(0);
 }
 
+//-----------------------------------------
+// Entry point
+//-----------------------------------------
 int main(int argc, char** argv) {
     ros::init(argc, argv, "gmsl_half_res_node");
     ros::NodeHandle nh;
