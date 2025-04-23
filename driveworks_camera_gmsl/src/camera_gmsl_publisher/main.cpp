@@ -61,6 +61,8 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     p += (isSlave ? "1" : "0");
 
     dwSensorParams sParams = {};
+    // Specify the GMSL camera protocol
+    sParams.protocol   = "camera.gmsl";
     sParams.parameters = p.c_str();
     CHECK_DW_ERROR(dwSAL_createSensor(&camera_, sParams, sal_));
     CHECK_DW_ERROR(dwSensor_start(camera_));
