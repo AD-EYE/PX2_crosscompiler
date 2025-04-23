@@ -7,7 +7,6 @@
 #include <dw/core/Context.h>
 #include <dw/core/VersionCurrent.h>        // for DW_VERSION
 #include <dw/core/Logger.h>
-#include <dw/core/Error.h>                 // for dwGetLastErrorString
 #include <dw/sensors/Sensors.h>
 #include <dw/sensors/camera/Camera.h>
 #include <dw/image/Image.h>               // dwImage_copyConvert, dwImage_create, dwImage_getCpuPointer
@@ -17,16 +16,14 @@
 #include <signal.h>
 
 //-----------------------------------------
-// Error-checking macro
+// Error-checking macro (simplified)
 //-----------------------------------------
 #define CHECK_DW_ERROR(expr) do {                       \
     dwStatus _status = (expr);                          \
     if (_status != DW_SUCCESS) {                        \
-        const char* _name = nullptr;                    \
-        dwGetStatusName(_status, &_name);               \
-        ROS_ERROR("DriveWorks error %s at %s:%d",     \
-                  _name, __FILE__, __LINE__);           \
-        throw std::runtime_error(_name);                 \
+        ROS_ERROR("DriveWorks error %d at %s:%d",     \
+                  _status, __FILE__, __LINE__);         \
+        throw std::runtime_error(std::to_string(_status));\
     }                                                   \
 } while(0)
 
@@ -55,14 +52,13 @@ void initDriveWorks() {
 }
 
 //-----------------------------------------
-// Configure GMSL sensor
+// Configure GMSL sensor for GPU output
 //-----------------------------------------
 void initCamera(const std::string& camType, int csiPort, bool isSlave) {
-    // Build parameters string
     std::string paramStr = "output-format=processed,";
-    paramStr += "camera-type="  + camType + ",";
-    paramStr += "csi-port="     + std::to_string(csiPort) + ",";
-    paramStr += "slave="        + (isSlave?"1":"0");
+    paramStr += "camera-type=" + camType + ",";
+    paramStr += "csi-port=" + std::to_string(csiPort) + ",";
+    paramStr += "slave=" + (isSlave ? "1" : "0");
 
     dwSensorParams params = {};
     params.parameters = paramStr.c_str();
@@ -111,7 +107,6 @@ void processLoop() {
     while (ros::ok()) {
         CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, 0, 100000, camera_));
 
-        // Get native processed frame as CUDA image
         dwImageHandle_t inCUDA = DW_NULL_HANDLE;
         CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&inCUDA, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
 
