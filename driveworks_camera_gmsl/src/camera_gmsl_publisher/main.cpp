@@ -5,7 +5,7 @@
 #include <sensor_msgs/image_encodings.h>
 
 #include <dw/core/Context.h>
-#include <dw/core/VersionCurrent.h>        // for DW_VERSION
+#include <dw/core/VersionCurrent.h>        // DW_VERSION
 #include <dw/core/Logger.h>
 #include <dw/sensors/Sensors.h>
 #include <dw/sensors/camera/Camera.h>
@@ -13,6 +13,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <signal.h>
 
 //-----------------------------------------
@@ -41,7 +42,7 @@ const int HALF_WIDTH  = 960;
 const int HALF_HEIGHT = 604;
 
 //-----------------------------------------
-// Init SDK & SAL
+// Initialize DriveWorks SDK & HAL
 //-----------------------------------------
 void initDriveWorks() {
     dwContextParameters params = {};
@@ -51,10 +52,9 @@ void initDriveWorks() {
 }
 
 //-----------------------------------------
-// Init Camera
+// Initialize camera using GMSL plugin defaults
 //-----------------------------------------
 void initCamera(const std::string& camType, int csiPort, bool isSlave) {
-    // Build sensor parameters string matching DriveWorks GMSL plugin defaults
     std::ostringstream oss;
     oss << "output-format=processed,fifo-size=3,camera-type=" << camType;
     oss << ",csi-port="  << csiPort;
@@ -68,50 +68,23 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     CHECK_DW_ERROR(dwSAL_createSensor(&camera_, sParams, sal_));
     CHECK_DW_ERROR(dwSensor_start(camera_));
 
-    // Wait for first valid frame
-    dwCameraFrameHandle_t frame;
-    dwStatus st;
-    do { st = dwSensorCamera_readFrame(&frame, 0, 100000, camera_); }
-    while (st == DW_NOT_READY);
-    if (st != DW_SUCCESS)
-        throw std::runtime_error("Camera start failed");
-
-    dwCameraProperties props;
-    CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&props, camera_));
-    ROS_INFO("Camera: %dx%d @ %.2f FPS", props.resolution.x,
-             props.resolution.y, props.framerate);
-    CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
-}
-    std::string p;
-    p += "camera-name=" + camName + ",";
-    p += "interface="    + interface + ",";
-    p += "link=0,";
-    p += "output-format=processed,";
-    p += "CPHY-mode=1,";           // use CPHY
-    p += std::string("slave=") + (isSlave ? "true" : "false");
-
-    dwSensorParams sParams = {};
-    sParams.protocol   = "camera.gmsl";
-    sParams.parameters = p.c_str();
-    CHECK_DW_ERROR(dwSAL_createSensor(&camera_, sParams, sal_));
-    CHECK_DW_ERROR(dwSensor_start(camera_));
-
-    // First frame
+    // wait for first valid frame
     dwCameraFrameHandle_t frame;
     dwStatus st;
     do { st = dwSensorCamera_readFrame(&frame, 0, 100000, camera_); }
     while (st == DW_NOT_READY);
     if (st != DW_SUCCESS) throw std::runtime_error("Camera start failed");
 
+    // retrieve properties
     dwCameraProperties props;
     CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&props, camera_));
-    ROS_INFO("Camera: %dx%d @ %.2f FPS", props.resolution.x,
+    ROS_INFO("Camera initialized: %dx%d @ %.2f FPS", props.resolution.x,
              props.resolution.y, props.framerate);
     CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
 }
 
 //-----------------------------------------
-// Init Images
+// Create half-resolution images
 //-----------------------------------------
 void initHalfResImages() {
     dwImageProperties gp = {};
@@ -120,44 +93,40 @@ void initHalfResImages() {
     gp.format = DW_IMAGE_FORMAT_RGBA_UINT8;
     gp.type   = DW_IMAGE_CUDA;
     CHECK_DW_ERROR(dwImage_create(&imgCUDA_half, gp, sdk_));
-    
+
     dwImageProperties cp = gp;
     cp.type = DW_IMAGE_CPU;
     CHECK_DW_ERROR(dwImage_create(&imgCPU_half, cp, sdk_));
 
-    ROS_INFO("Half-res images: %dx%d", HALF_WIDTH, HALF_HEIGHT);
+    ROS_INFO("Half-res images created: %dx%d", HALF_WIDTH, HALF_HEIGHT);
 }
 
 //-----------------------------------------
-// Main loop
+// Capture loop: downsample and publish
 //-----------------------------------------
 void processLoop() {
     dwCameraFrameHandle_t frame;
     while (ros::ok()) {
-        // Acquire full-res frame
         CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, 0, 100000, camera_));
 
-        // Get NvMedia image
+        // get NVMedia image
         dwImageNvMedia* nvPtr = nullptr;
         CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvPtr,
                         DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
-        
-        // NVMedia->CUDA
+
+        // downsample NVMedia->CUDA
         CHECK_DW_ERROR(dwImage_copyConvert(imgCUDA_half,
-                            reinterpret_cast<dwImageHandle_t>(nvPtr),
-                            sdk_));
-        // CUDA->CPU
-        CHECK_DW_ERROR(dwImage_copyConvert(imgCPU_half,
-                            imgCUDA_half,
-                            sdk_));
-        
-        // Retrieve CPU buffer
+                            reinterpret_cast<dwImageHandle_t>(nvPtr), sdk_));
+        // copy CUDA->CPU
+        CHECK_DW_ERROR(dwImage_copyConvert(imgCPU_half, imgCUDA_half, sdk_));
+
+        // access CPU buffer
         dwImageCPU* cpuImg = nullptr;
         CHECK_DW_ERROR(dwImage_getCPU(&cpuImg, imgCPU_half));
         uint8_t* data = cpuImg->data[0];
         size_t  pitch = cpuImg->pitch[0];
 
-        // Publish via ROS
+        // publish ROS image
         sensor_msgs::Image msg;
         msg.header.stamp    = ros::Time::now();
         msg.header.frame_id = "gmsl_camera";
@@ -169,28 +138,27 @@ void processLoop() {
         msg.data.assign(data, data + pitch * HALF_HEIGHT);
         pub_img.publish(msg);
 
-        // Return frame
         CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
         ros::spinOnce();
     }
 }
 
 //-----------------------------------------
-// Shutdown
+// Clean shutdown
 //-----------------------------------------
 void sigHandler(int) {
-    if (camera_)         dwSensor_stop(camera_);
-    if (camera_)         dwSAL_releaseSensor(&camera_);
-    if (imgCUDA_half)    dwImage_destroy(&imgCUDA_half);
-    if (imgCPU_half)     dwImage_destroy(&imgCPU_half);
-    if (sal_)            dwSAL_release(&sal_);
-    if (sdk_)            dwRelease(&sdk_);
+    if (camera_)      dwSensor_stop(camera_);
+    if (camera_)      dwSAL_releaseSensor(&camera_);
+    if (imgCUDA_half) dwImage_destroy(&imgCUDA_half);
+    if (imgCPU_half)  dwImage_destroy(&imgCPU_half);
+    if (sal_)         dwSAL_release(&sal_);
+    if (sdk_)         dwRelease(&sdk_);
     ros::shutdown();
     exit(0);
 }
 
 //-----------------------------------------
-// Main
+// Entry point
 //-----------------------------------------
 int main(int argc, char** argv) {
     ros::init(argc, argv, "gmsl_half_res_node");
