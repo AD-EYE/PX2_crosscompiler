@@ -8,7 +8,7 @@
 #include <dw/core/VersionCurrent.h>        // DW_VERSION
 #include <dw/core/Logger.h>
 #include <dw/sensors/Sensors.h>
-#include <dw/sensors/camera/Camera.h>
+
 #include <dw/image/Image.h>               // dwImage_create, dwImage_copyConvert, dwImage_getCPU, dwImage_destroy
 
 #include <stdexcept>
@@ -33,7 +33,7 @@
 //-----------------------------------------
 static dwContextHandle_t sdk_    = DW_NULL_HANDLE;
 static dwSALHandle_t     sal_    = DW_NULL_HANDLE;
-static dwSensorHandle_t  camera_ = DW_NULL_HANDLE;
+
 
 //-----------------------------------------
 // Init SDK & HAL
