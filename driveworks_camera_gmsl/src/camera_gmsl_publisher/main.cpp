@@ -1,4 +1,4 @@
-// --- main.cpp: PX2 + DriveWorks 1.2 — Full Example — Half‑Res (960×604) + GPU Offload + ROS
+// --- main.cpp: PX2 + DriveWorks 1.2 — Full Example — Half-Res (960×604) + GPU Offload + ROS
 
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
@@ -18,13 +18,13 @@
 //-----------------------------------------
 // Error-checking macro (simplified)
 //-----------------------------------------
-#define CHECK_DW_ERROR(expr) do {                       \
-    dwStatus _status = (expr);                          \
-    if (_status != DW_SUCCESS) {                        \
-        ROS_ERROR("DriveWorks error %d at %s:%d",     \
-                  _status, __FILE__, __LINE__);         \
+#define CHECK_DW_ERROR(expr) do {                         \
+    dwStatus _status = (expr);                            \
+    if (_status != DW_SUCCESS) {                          \
+        ROS_ERROR("DriveWorks error %d at %s:%d",       \
+                  _status, __FILE__, __LINE__);           \
         throw std::runtime_error(std::to_string(_status));\
-    }                                                   \
+    }                                                     \
 } while(0)
 
 //-----------------------------------------
@@ -58,7 +58,8 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     std::string paramStr = "output-format=processed,";
     paramStr += "camera-type=" + camType + ",";
     paramStr += "csi-port=" + std::to_string(csiPort) + ",";
-    paramStr += "slave=" + (isSlave ? "1" : "0");
+    paramStr += "slave=";
+    paramStr += (isSlave ? "1" : "0");
 
     dwSensorParams params = {};
     params.parameters = paramStr.c_str();
@@ -72,12 +73,14 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     do {
         stat = dwSensorCamera_readFrame(&frame, 0, 100000, camera_);
     } while (stat == DW_NOT_READY);
-    if (stat != DW_SUCCESS) throw std::runtime_error("Camera failed to start");
+    if (stat != DW_SUCCESS)
+        throw std::runtime_error("Camera failed to start");
 
-    // Retrieve properties
+    // Retrieve and log properties
     dwCameraProperties camProps;
     CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&camProps, camera_));
-    ROS_INFO("Camera: %dx%d @ %.2f FPS", camProps.resolution.x, camProps.resolution.y, camProps.framerate);
+    ROS_INFO("Camera: %dx%d @ %.2f FPS",
+             camProps.resolution.x, camProps.resolution.y, camProps.framerate);
     CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
 }
 
@@ -105,18 +108,25 @@ void initHalfResImages() {
 void processLoop() {
     dwCameraFrameHandle_t frame;
     while (ros::ok()) {
+        // Read a full-res frame (NVMedia)
         CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, 0, 100000, camera_));
-
-        dwImageHandle_t inCUDA = DW_NULL_HANDLE;
-        CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&inCUDA, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
-
-        // Downsample: CUDA->CUDA
-        CHECK_DW_ERROR(dwImage_copyConvert(imgCUDA_half, inCUDA, sdk_));
-        // Transfer to CPU: CUDA->CPU
-        CHECK_DW_ERROR(dwImage_copyConvert(imgCPU_half, imgCUDA_half, sdk_));
+        
+        // Get NVMedia image pointer
+        dwImageNvMedia* nvImg = nullptr;
+        CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvImg,
+                            DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
+        // Downsample NVMedia->CUDA
+        CHECK_DW_ERROR(dwImage_copyConvert(imgCUDA_half,
+                                          (dwImageHandle_t)nvImg,
+                                          sdk_));
+        // Transfer CUDA->CPU
+        CHECK_DW_ERROR(dwImage_copyConvert(imgCPU_half,
+                                          imgCUDA_half,
+                                          sdk_));
 
         // Publish via ROS
-        uint8_t* cpuPtr; size_t rowPitch;
+        uint8_t* cpuPtr;
+        size_t rowPitch;
         CHECK_DW_ERROR(dwImage_getCpuPointer(&cpuPtr, &rowPitch, imgCPU_half));
         sensor_msgs::Image msg;
         msg.header.stamp    = ros::Time::now();
@@ -126,7 +136,8 @@ void processLoop() {
         msg.encoding        = sensor_msgs::image_encodings::RGBA8;
         msg.is_bigendian    = false;
         msg.step            = rowPitch;
-        msg.data.assign(cpuPtr, cpuPtr + rowPitch * HALF_HEIGHT);
+        msg.data.assign(cpuPtr,
+                        cpuPtr + rowPitch * HALF_HEIGHT);
         pub_img.publish(msg);
 
         CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
