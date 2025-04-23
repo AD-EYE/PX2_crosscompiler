@@ -22,11 +22,11 @@
 #define CHECK_DW_ERROR(expr) do {                       \
     dwStatus _status = (expr);                          \
     if (_status != DW_SUCCESS) {                        \
-        const char* _msg = nullptr;                     \
-        dwGetLastErrorString(&_msg);                    \
+        const char* _name = nullptr;                    \
+        dwGetStatusName(_status, &_name);               \
         ROS_ERROR("DriveWorks error %s at %s:%d",     \
-                  _msg, __FILE__, __LINE__);           \
-        throw std::runtime_error(_msg);                 \
+                  _name, __FILE__, __LINE__);           \
+        throw std::runtime_error(_name);                 \
     }                                                   \
 } while(0)
 
