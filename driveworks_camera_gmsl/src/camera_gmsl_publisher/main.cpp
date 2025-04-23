@@ -150,8 +150,8 @@ void processLoop() {
 void sigHandler(int) {
     if (camera_)         dwSensor_stop(camera_);
     if (camera_)         dwSAL_releaseSensor(&camera_);
-    if (imgCUDA_half)    dwImage_destroy(imgCUDA_half);
-    if (imgCPU_half)     dwImage_destroy(imgCPU_half);
+    if (imgCUDA_half)    dwImage_destroy(&imgCUDA_half);
+    if (imgCPU_half)     dwImage_destroy(&imgCPU_half);
     if (sal_)            dwSAL_release(&sal_);
     if (sdk_)            dwRelease(&sdk_);
     ros::shutdown();
