@@ -55,6 +55,9 @@ void initDriveWorks() {
 //-----------------------------------------
 void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     std::string p = "output-format=processed,";
+    // specify single camera group and count
+    p += "camera-group=a,";
+    p += "camera-count=1,";
     p += "camera-type=" + camType + ",";
     p += "csi-port="  + std::to_string(csiPort) + ",";
     p += "slave=";
