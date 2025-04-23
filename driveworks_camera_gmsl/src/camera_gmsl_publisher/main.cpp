@@ -8,7 +8,7 @@
 #include <dw/core/Logger.h>
 #include <dw/sensors/Sensors.h>
 #include <dw/sensors/camera/Camera.h>
-#include <dw/image/Converter.hpp>       // dwImage_copyConvert
+#include <dw/image/Image.h>       // dwImage_copyConvert, dwImage_create, dwImage_getCPU / getCUDA
 
 #include <stdexcept>
 #include <string>
