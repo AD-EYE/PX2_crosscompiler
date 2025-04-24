@@ -31,8 +31,19 @@
 //-----------------------------------------
 // Init SDK & HAL
 //-----------------------------------------
+//-----------------------------------------
+// Init SDK & HAL
+//-----------------------------------------
 void initDriveWorks() {
     dwContextParameters params = {};
+    // Initialize SDK
+    dwContextHandle_t sdk = nullptr;
+    CHECK_DW_ERROR(dwInitialize(&sdk, DW_VERSION, &params));
+    // Initialize SAL
+    dwSALHandle_t sal = nullptr;
+    CHECK_DW_ERROR(dwSAL_initialize(&sal, sdk));
+    std::cout << "[DEBUG] DriveWorks SDK & SAL initialized" << std::endl;
+};
     CHECK_DW_ERROR(dwInitialize(nullptr, DW_VERSION, &params));
     dwContextHandle_t sdk = nullptr;
     CHECK_DW_ERROR(dwInitialize(&sdk, DW_VERSION, &params));
