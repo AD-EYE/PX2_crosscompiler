@@ -60,8 +60,6 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     oss << "sensor-type=gmsl,";
     oss << "camera-type=" << camType << ",";
     oss << "csi-port="  << csiPort << ",";
-    oss << "pixel-format=bayer,bit-depth=10,mode=RAW10,";
-    oss << "output-format=processed,fifo-size=3,";
     oss << "slave="     << (isSlave ? "1" : "0");
     std::string paramsStr = oss.str();
     std::cout << "[PARAMS] " << paramsStr << std::endl;
@@ -74,12 +72,14 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     CHECK_DW_ERROR(dwSAL_createSensor(&camera_, sParams, sal_));
     CHECK_DW_ERROR(dwSensor_start(camera_));
 
+    // Wait for first valid frame
     dwCameraFrameHandle_t frame;
     dwStatus st;
     do { st = dwSensorCamera_readFrame(&frame, 0, 100000, camera_); }
     while (st == DW_NOT_READY);
     if (st != DW_SUCCESS) throw std::runtime_error("Camera failed to start");
 
+    // Log properties and return frame
     dwCameraProperties props;
     CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&props, camera_));
     ROS_INFO("Camera running: %dx%d @ %.2f FPS", props.resolution.x,
@@ -87,8 +87,6 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
 }
 
-
-//-----------------------------------------
 // Create half-resolution images
 //-----------------------------------------
 void initHalfResImages() {
