@@ -60,6 +60,7 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     oss << "sensor-type=gmsl,";
     oss << "camera-type=" << camType << ",";
     oss << "csi-port="  << csiPort << ",";
+    oss << "link=0,";    
     oss << "slave="     << (isSlave ? "1" : "0");
     std::string paramsStr = oss.str();
     std::cout << "[PARAMS] " << paramsStr << std::endl;
