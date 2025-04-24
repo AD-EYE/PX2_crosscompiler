@@ -61,7 +61,7 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     oss << "csi-port="  << csiPort << ",";
     oss << "pixel-format=bayer,bit-depth=10,mode=RAW10,";
     oss << "output-format=processed,fifo-count=3,";
-    oss << "sensor-count=1,sensor-group=a,", oss;
+    oss << "sensor-count=1,sensor-group=a,";  // fixed comma operator typo
     oss << "slave="     << (isSlave ? "1" : "0");
     std::string paramsStr = oss.str();
     ROS_INFO("Using GMSL params: %s", paramsStr.c_str());
