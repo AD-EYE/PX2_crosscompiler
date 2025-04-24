@@ -123,14 +123,18 @@ int main(int argc, char** argv) {
         ros::Rate rate(props.framerate);
         while (ros::ok()) {
             CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, 0, 100000, camera));
-            dwImageNvMedia* nvPtr = nullptr;
-            CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(
-                &nvPtr, DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
 
-            CHECK_DW_ERROR(dwImage_copyConvert(imgCuda, 
-                reinterpret_cast<dwImageHandle_t>(nvPtr), sdk));
+            // Get CUDA image directly (processed output)
+            dwImageHandle_t inCuda = DW_NULL_HANDLE;
+            CHECK_DW_ERROR(dwSensorCamera_getImageCuda(&inCuda,
+                DW_CAMERA_OUTPUT_PROCESSED, frame));
+
+            // Downsample on GPU then copy to CPU
+            CHECK_DW_ERROR(dwImage_copyConvert(imgCuda,
+                inCuda, sdk));
             CHECK_DW_ERROR(dwImage_copyConvert(imgCpu, imgCuda, sdk));
 
+            // Access CPU buffer
             dwImageCPU* cpuImg = nullptr;
             CHECK_DW_ERROR(dwImage_getCPU(&cpuImg, imgCpu));
             sensor_msgs::Image msg;
@@ -148,6 +152,7 @@ int main(int argc, char** argv) {
             CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
             ros::spinOnce();
             rate.sleep();
+        }
         }
 
     } catch (const std::exception& e) {
