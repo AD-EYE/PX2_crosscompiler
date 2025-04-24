@@ -9,8 +9,7 @@
 #include <dw/core/Context.h>
 #include <dw/core/VersionCurrent.h>        // DW_VERSION
 #include <dw/sensors/Sensors.h>
-#include <dw/sensors/camera/Camera.h>
-#include <dw/sensors/camera/CameraCuda.h>  // for CUDA image access
+#include <dw/sensors/camera/Camera.h>     // includes CUDA image access
 #include <dw/image/Image.h>
 #include <dw/image/Converter.h>           // for dwImage_copyConvert
 
@@ -21,13 +20,12 @@
 //-----------------------------------------
 // Check DriveWorks return status
 //-----------------------------------------
-#define CHECK_DW_ERROR(expr) do {                    \
-    dwStatus status = (expr);                       \
-    if (status != DW_SUCCESS) {                     \
-        ROS_ERROR("DriveWorks error %d at %s:%d", \
-                  status, __FILE__, __LINE__);    \
+#define CHECK_DW_ERROR(expr) do { \
+    dwStatus status = (expr);        \
+    if (status != DW_SUCCESS) {      \
+        ROS_ERROR("DriveWorks error %d at %s:%d", status, __FILE__, __LINE__); \
         throw std::runtime_error("DriveWorks error " + std::to_string(status)); \
-    }                                               \
+    }                                \
 } while(0)
 
 //-----------------------------------------
@@ -127,7 +125,7 @@ int main(int argc, char** argv) {
 
             // Retrieve processed CUDA image
             dwImageHandle_t inCuda = DW_NULL_HANDLE;
-            CHECK_DW_ERROR(dwSensorCamera_getImageCUDA(&inCuda, 
+            CHECK_DW_ERROR(dwSensorCamera_getImageCuda(&inCuda, 
                 DW_CAMERA_OUTPUT_PROCESSED, frame));
 
             // GPU downsample then CPU copy
@@ -135,8 +133,9 @@ int main(int argc, char** argv) {
             CHECK_DW_ERROR(dwImage_copyConvert(imgCpu, imgCuda, sdk));
 
             // Publish ROS Image
-            dwImageCPU* cpuImg = nullptr;
-            CHECK_DW_ERROR(dwImage_getCPU(&cpuImg, imgCpu));
+            void* dataPtr = nullptr;
+            size_t rowPitch = 0;
+            CHECK_DW_ERROR(dwImage_getCpuPointer(&dataPtr, &rowPitch, imgCpu));
             sensor_msgs::Image msg;
             msg.header.stamp    = ros::Time::now();
             msg.header.frame_id = "gmsl_camera";
@@ -144,8 +143,9 @@ int main(int argc, char** argv) {
             msg.width           = HALF_W;
             msg.encoding        = sensor_msgs::image_encodings::RGBA8;
             msg.is_bigendian    = false;
-            msg.step            = cpuImg->pitch[0];
-            msg.data.assign(cpuImg->data[0], cpuImg->data[0] + msg.step * HALF_H);
+            msg.step            = rowPitch;
+            msg.data.resize(rowPitch * HALF_H);
+            memcpy(msg.data.data(), dataPtr, rowPitch * HALF_H);
             pubImage.publish(msg);
 
             CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
