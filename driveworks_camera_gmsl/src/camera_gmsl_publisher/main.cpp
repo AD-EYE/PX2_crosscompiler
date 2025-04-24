@@ -10,7 +10,9 @@
 #include <dw/core/VersionCurrent.h>        // DW_VERSION
 #include <dw/sensors/Sensors.h>
 #include <dw/sensors/camera/Camera.h>
+#include <dw/sensors/camera/CameraCuda.h>  // for CUDA image access
 #include <dw/image/Image.h>
+#include <dw/image/Converter.h>           // for dwImage_copyConvert
 
 #include <stdexcept>
 #include <sstream>
@@ -20,12 +22,12 @@
 // Check DriveWorks return status
 //-----------------------------------------
 #define CHECK_DW_ERROR(expr) do {                    \
-    dwStatus status = (expr);                      \
-    if (status != DW_SUCCESS) {                    \
-        ROS_ERROR("DriveWorks error %d at %s:%d",\
+    dwStatus status = (expr);                       \
+    if (status != DW_SUCCESS) {                     \
+        ROS_ERROR("DriveWorks error %d at %s:%d", \
                   status, __FILE__, __LINE__);    \
         throw std::runtime_error("DriveWorks error " + std::to_string(status)); \
-    }                                              \
+    }                                               \
 } while(0)
 
 //-----------------------------------------
@@ -103,7 +105,7 @@ int main(int argc, char** argv) {
         // Get properties
         dwCameraProperties props;
         CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&props, camera));
-        ROS_INFO("Camera running: %dx%d @ %.2f FPS",
+        ROS_INFO("Camera running: %dx%d @ %.2f FPS", 
                  props.resolution.x, props.resolution.y, props.framerate);
         CHECK_DW_ERROR(dwSensorCamera_returnFrame(&frame));
 
@@ -125,7 +127,7 @@ int main(int argc, char** argv) {
 
             // Retrieve processed CUDA image
             dwImageHandle_t inCuda = DW_NULL_HANDLE;
-            CHECK_DW_ERROR(dwSensorCamera_getImageCuda(&inCuda,
+            CHECK_DW_ERROR(dwSensorCamera_getImageCUDA(&inCuda, 
                 DW_CAMERA_OUTPUT_PROCESSED, frame));
 
             // GPU downsample then CPU copy
