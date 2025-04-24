@@ -9,7 +9,7 @@
 #include <dw/core/Context.h>
 #include <dw/core/VersionCurrent.h>        // DW_VERSION
 #include <dw/sensors/Sensors.h>
-#include <dw/sensors/camera/CameraCuda.h>  // Camera CUDA interface
+#include <dw/sensors/camera/Camera.h>     // Camera sensor API
 #include <dw/image/Image.h>
 #include <dw/image/Converter.hpp>         // dwImage_copyConvert
 
@@ -25,8 +25,7 @@
     if (status != DW_SUCCESS) {                           \
         ROS_ERROR("DriveWorks error %d at %s:%d",      \
                   status, __FILE__, __LINE__);           \
-        throw std::runtime_error("DriveWorks error "    \
-                                 + std::to_string(status)); \
+        throw std::runtime_error(std::string("DriveWorks error ") + std::to_string(status)); \
     }                                                     \
 } while(0)
 
@@ -95,9 +94,9 @@ int main(int argc, char** argv) {
         CHECK_DW_ERROR(dwSensor_start(camera));
 
         // Wait for first frame
-        dwCameraFrameHandle_t frame;
+        dwCameraFrameHandle_t frame = DW_NULL_HANDLE;
         dwStatus st = DW_NOT_READY;
-        while (st == DW_NOT_READY) {
+        while (st == DW_NOT_READY && ros::ok()) {
             st = dwSensorCamera_readFrame(&frame, 0, 100000, camera);
         }
         if (st != DW_SUCCESS) throw std::runtime_error("Camera failed to start");
