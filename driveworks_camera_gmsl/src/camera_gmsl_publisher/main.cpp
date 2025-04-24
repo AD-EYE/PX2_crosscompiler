@@ -61,7 +61,7 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     oss << "camera-type=" << camType << ",";
     oss << "csi-port="  << csiPort << ",";
     oss << "pixel-format=bayer,bit-depth=10,mode=RAW10,";
-    oss << "output-format=processed,fifo-count=3,";
+    oss << "output-format=processed,fifo-size=3,";
     oss << "slave="     << (isSlave ? "1" : "0");
     std::string paramsStr = oss.str();
     std::cout << "[PARAMS] " << paramsStr << std::endl;
