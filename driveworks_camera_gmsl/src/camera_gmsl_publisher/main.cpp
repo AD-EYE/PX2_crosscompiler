@@ -11,7 +11,7 @@
 #include <dw/sensors/Sensors.h>
 #include <dw/sensors/camera/Camera.h>     // Camera sensor API
 #include <dw/image/Image.h>
-#include <dw/image/Converter.h>           // dwImage_copyConvert
+#include <dw/image/Converter.hpp>         // dwImage_copyConvert
 
 #include <stdexcept>
 #include <sstream>
