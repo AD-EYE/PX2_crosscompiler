@@ -10,7 +10,6 @@
 #include <dw/core/VersionCurrent.h>        // DW_VERSION
 #include <dw/sensors/Sensors.h>
 #include <dw/sensors/camera/Camera.h>
-#include <dw/sensors/camera/CameraCuda.h>
 #include <dw/image/Image.h>
 
 #include <stdexcept>
