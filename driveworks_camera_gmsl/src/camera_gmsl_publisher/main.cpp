@@ -57,8 +57,15 @@ void initDriveWorks() {
 void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     // Build and print minimal parameter string
     std::ostringstream oss;
-    oss << "sensor-type=gmsl,";
+    // Only camera-type, port, link, slave per NVIDIA sample
+    std::ostringstream oss;
     oss << "camera-type=" << camType << ",";
+    oss << "csi-port="  << csiPort << ",";
+    oss << "link=0,";
+    oss << "slave="     << (isSlave ? "1" : "0");
+    // End of parameter string start
+    oss << std::flush; // ensure stream flushed
+    // Note: no sensor-type prefix=" << camType << ",";
     oss << "csi-port="  << csiPort << ",";
     oss << "link=0,";    
     oss << "slave="     << (isSlave ? "1" : "0");
