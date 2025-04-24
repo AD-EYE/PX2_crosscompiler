@@ -43,6 +43,8 @@ void initDriveWorks() {
 //-----------------------------------------
 // Debug: Print GMSL parameters only
 //-----------------------------------------
+// Debug: Print GMSL parameters only
+//-----------------------------------------
 void initCameraDebug(const std::string& camType, int csiPort, bool isSlave) {
     std::ostringstream oss;
     oss << "output-format=processed,fifo-size=3,camera-type=" << camType;
@@ -51,10 +53,9 @@ void initCameraDebug(const std::string& camType, int csiPort, bool isSlave) {
     std::string paramsStr = oss.str();
 
     std::cout << "[DEBUG] GMSL params = " << paramsStr << std::endl;
-    // Keep node alive to view output
-    ros::Rate rate(1);
-    while (ros::ok()) {
-        rate.sleep();
+    // Keep running so output is visible
+    while (true) {
+        ::sleep(1);
     }
 }
 
