@@ -9,9 +9,9 @@
 #include <dw/core/Context.h>
 #include <dw/core/VersionCurrent.h>        // DW_VERSION
 #include <dw/sensors/Sensors.h>
-#include <dw/sensors/camera/Camera.h>     // includes CUDA image access
+#include <dw/sensors/camera/CameraCuda.h>  // Camera CUDA interface
 #include <dw/image/Image.h>
-#include <dw/image/Converter.h>           // for dwImage_copyConvert
+#include <dw/image/Converter.hpp>         // dwImage_copyConvert
 
 #include <stdexcept>
 #include <sstream>
@@ -20,12 +20,14 @@
 //-----------------------------------------
 // Check DriveWorks return status
 //-----------------------------------------
-#define CHECK_DW_ERROR(expr) do { \
-    dwStatus status = (expr);        \
-    if (status != DW_SUCCESS) {      \
-        ROS_ERROR("DriveWorks error %d at %s:%d", status, __FILE__, __LINE__); \
-        throw std::runtime_error("DriveWorks error " + std::to_string(status)); \
-    }                                \
+#define CHECK_DW_ERROR(expr) do {                          \
+    dwStatus status = (expr);                             \
+    if (status != DW_SUCCESS) {                           \
+        ROS_ERROR("DriveWorks error %d at %s:%d",      \
+                  status, __FILE__, __LINE__);           \
+        throw std::runtime_error("DriveWorks error "    \
+                                 + std::to_string(status)); \
+    }                                                     \
 } while(0)
 
 //-----------------------------------------
@@ -92,7 +94,7 @@ int main(int argc, char** argv) {
         CHECK_DW_ERROR(dwSAL_createSensor(&camera, sParams, sal));
         CHECK_DW_ERROR(dwSensor_start(camera));
 
-        // Await first frame
+        // Wait for first frame
         dwCameraFrameHandle_t frame;
         dwStatus st = DW_NOT_READY;
         while (st == DW_NOT_READY) {
@@ -118,21 +120,21 @@ int main(int argc, char** argv) {
         CHECK_DW_ERROR(dwImage_create(&imgCpu, imgProp, sdk));
         ROS_INFO("Half-res images ready: %dx%d", HALF_W, HALF_H);
 
-        // Main capture loop
+        // Main loop
         ros::Rate rate(props.framerate);
         while (ros::ok()) {
             CHECK_DW_ERROR(dwSensorCamera_readFrame(&frame, 0, 100000, camera));
 
-            // Retrieve processed CUDA image
+            // Get processed CUDA image
             dwImageHandle_t inCuda = DW_NULL_HANDLE;
-            CHECK_DW_ERROR(dwSensorCamera_getImageCuda(&inCuda, 
+            CHECK_DW_ERROR(dwSensorCamera_getImageCuda(&inCuda,
                 DW_CAMERA_OUTPUT_PROCESSED, frame));
 
-            // GPU downsample then CPU copy
+            // Downsample on GPU, convert to CPU
             CHECK_DW_ERROR(dwImage_copyConvert(imgCuda, inCuda, sdk));
             CHECK_DW_ERROR(dwImage_copyConvert(imgCpu, imgCuda, sdk));
 
-            // Publish ROS Image
+            // Publish ROS image
             void* dataPtr = nullptr;
             size_t rowPitch = 0;
             CHECK_DW_ERROR(dwImage_getCpuPointer(&dataPtr, &rowPitch, imgCpu));
