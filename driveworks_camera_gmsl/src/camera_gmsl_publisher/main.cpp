@@ -4,6 +4,7 @@
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
 #include <signal.h>
+#include <iostream>
 
 #include <dw/core/Context.h>
 #include <dw/core/VersionCurrent.h>        // DW_VERSION
@@ -15,7 +16,6 @@
 #include <stdexcept>
 #include <string>
 #include <sstream>
-#include <iostream>
 
 //-----------------------------------------
 // Error-check macro
@@ -56,6 +56,7 @@ void initDriveWorks() {
 // Initialize GMSL camera with refined parameters
 //-----------------------------------------
 void initCamera(const std::string& camType, int csiPort, bool isSlave) {
+    // Build and print parameter string
     std::ostringstream oss;
     oss << "sensor-type=gmsl,";
     oss << "camera-type=" << camType << ",";
@@ -75,15 +76,15 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
     CHECK_DW_ERROR(dwSAL_createSensor(&camera_, sParams, sal_));
     CHECK_DW_ERROR(dwSensor_start(camera_));
 
+    // Wait for first valid frame
     dwCameraFrameHandle_t frame;
     dwStatus st;
     do {
         st = dwSensorCamera_readFrame(&frame, 0, 100000, camera_);
     } while (st == DW_NOT_READY);
-    if (st != DW_SUCCESS) {
-        throw std::runtime_error("Camera failed to start");
-    }
+    if (st != DW_SUCCESS) throw std::runtime_error("Camera failed to start");
 
+    // Log properties and return frame
     dwCameraProperties props;
     CHECK_DW_ERROR(dwSensorCamera_getSensorProperties(&props, camera_));
     ROS_INFO("Camera running: %dx%d @ %.2f FPS", props.resolution.x,
@@ -95,17 +96,14 @@ void initCamera(const std::string& camType, int csiPort, bool isSlave) {
 // Create half-resolution images
 //-----------------------------------------
 void initHalfResImages() {
-    dwImageProperties gp = {};
-    gp.width  = HALF_WIDTH;
-    gp.height = HALF_HEIGHT;
-    gp.format = DW_IMAGE_FORMAT_RGBA_UINT8;
-    gp.type   = DW_IMAGE_CUDA;
-    CHECK_DW_ERROR(dwImage_create(&imgCUDA_half, gp, sdk_));
-
-    dwImageProperties cp = gp;
-    cp.type = DW_IMAGE_CPU;
-    CHECK_DW_ERROR(dwImage_create(&imgCPU_half, cp, sdk_));
-
+    dwImageProperties prop = {};
+    prop.width  = HALF_WIDTH;
+    prop.height = HALF_HEIGHT;
+    prop.format = DW_IMAGE_FORMAT_RGBA_UINT8;
+    prop.type   = DW_IMAGE_CUDA;
+    CHECK_DW_ERROR(dwImage_create(&imgCUDA_half, prop, sdk_));
+    prop.type = DW_IMAGE_CPU;
+    CHECK_DW_ERROR(dwImage_create(&imgCPU_half, prop, sdk_));
     ROS_INFO("Half-res images ready: %dx%d", HALF_WIDTH, HALF_HEIGHT);
 }
 
@@ -119,10 +117,10 @@ void processLoop() {
 
         dwImageNvMedia* nvPtr = nullptr;
         CHECK_DW_ERROR(dwSensorCamera_getImageNvMedia(&nvPtr,
-                              DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
+            DW_CAMERA_OUTPUT_NATIVE_PROCESSED, frame));
 
         CHECK_DW_ERROR(dwImage_copyConvert(imgCUDA_half,
-                              reinterpret_cast<dwImageHandle_t>(nvPtr), sdk_));
+            reinterpret_cast<dwImageHandle_t>(nvPtr), sdk_));
         CHECK_DW_ERROR(dwImage_copyConvert(imgCPU_half, imgCUDA_half, sdk_));
 
         dwImageCPU* cpuImg = nullptr;
